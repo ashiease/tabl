@@ -8,7 +8,7 @@ const ICONS: Record<string, string> = {
   Home: '◱',
   Session: '◷',
   Wait: '≡',
-  Admin: '◎',
+  Scan: '#',
 };
 
 export function TabBar({ state, descriptors, navigation }: BottomTabBarProps) {

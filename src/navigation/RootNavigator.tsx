@@ -13,11 +13,7 @@ import {
 } from '../state/selectors';
 import { findSpace, SPACES } from '../constants/spaces';
 import { USERS, findUser } from '../constants/users';
-import {
-  ADMIN_PASSCODE,
-  BREAK_MINUTES,
-  SESSION_SECONDS,
-} from '../constants/policy';
+import { ADMIN_PASSCODE, BREAK_MINUTES, SESSION_SECONDS } from '../constants/policy';
 import { theme } from '../constants/theme';
 import { newId, makeBreakEnd } from '../logic/sessions';
 import { computeExpiryActions } from '../logic/expiry';
@@ -30,16 +26,16 @@ import { MapScreen } from '../screens/MapScreen';
 import { SessionScreen } from '../screens/SessionScreen';
 import { WaitlistScreen } from '../screens/WaitlistScreen';
 import { AdminScreen } from '../screens/AdminScreen';
+import { ScanScreen } from '../screens/ScanScreen';
 
 // Components
 import { AppHeader } from './headers';
+import { TabBar } from './TabBar';
 import { ConfirmDialog, ConfirmConfig } from '../components/ConfirmDialog';
 import { AccountMenu } from '../components/AccountMenu';
 import { PickerSheet } from '../components/PickerSheet';
 import { PasscodeDialog } from '../components/PasscodeDialog';
 import { useToast } from '../components/Toast';
-import { TabBar } from './TabBar';
-
 
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
@@ -48,17 +44,13 @@ export function RootNavigator() {
   const { state, dispatch } = useStore();
   const toast = useToast();
 
-  // Global UI state
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const [hostelPickerOpen, setHostelPickerOpen] = useState(false);
   const [userSwitcherOpen, setUserSwitcherOpen] = useState(false);
   const [passcodeOpen, setPasscodeOpen] = useState(false);
 
-  // Confirm dialog (single reusable instance)
   const [confirmCfg, setConfirmCfg] = useState<ConfirmConfig | null>(null);
-  const [confirmResolve, setConfirmResolve] = useState<
-    ((v: boolean) => void) | null
-  >(null);
+  const [confirmResolve, setConfirmResolve] = useState<((v: boolean) => void) | null>(null);
 
   const confirm = useCallback((cfg: ConfirmConfig) => {
     return new Promise<boolean>(resolve => {
@@ -79,10 +71,10 @@ export function RootNavigator() {
     setConfirmResolve(null);
   }, [confirmResolve]);
 
-  // Derived values
   const user = findUser(state.currentUserId)!;
   const hasSession = !!myActiveSession(state);
   const waitCount = myWaitlist(state).length;
+  const admin = isAdmin(state);
 
   // Expiry tick
   useEffect(() => {
@@ -106,12 +98,7 @@ export function RootNavigator() {
   const notifyNextInWaitlist = useCallback(
     (tableId: string, snapshot = state) => {
       const next = snapshot.waitlist
-        .filter(
-          w =>
-            w.table_id === tableId &&
-            !w.notified &&
-            w.status === 'waiting'
-        )
+        .filter(w => w.table_id === tableId && !w.notified && w.status === 'waiting')
         .sort((a, b) => a.created_at.localeCompare(b.created_at))[0];
       if (next) {
         dispatch({
@@ -130,17 +117,13 @@ export function RootNavigator() {
     (tableId: string) => {
       const table = state.tables.find(t => t.id === tableId);
       if (!table) return;
-
       const sessionId = newId('session');
       const endsAt = new Date(Date.now() + SESSION_SECONDS * 1000).toISOString();
-
       dispatch({
         type: 'CHECK_IN',
         payload: { tableId, userId: state.currentUserId, sessionId, endsAt },
       });
       toast.show(`Checked in · ${table.label}`, 'success');
-
-      // Jump to the Session tab
       goToTab('Session');
     },
     [state, dispatch, toast]
@@ -149,10 +132,7 @@ export function RootNavigator() {
   const startBreak = useCallback(() => {
     const s = myActiveSession(state);
     if (!s) return;
-    dispatch({
-      type: 'START_BREAK',
-      payload: { sessionId: s.id, breakEndsAt: makeBreakEnd() },
-    });
+    dispatch({ type: 'START_BREAK', payload: { sessionId: s.id, breakEndsAt: makeBreakEnd() } });
     toast.show(`Break started · ${BREAK_MINUTES} min`, 'warning');
   }, [state, dispatch, toast]);
 
@@ -174,10 +154,7 @@ export function RootNavigator() {
       destructive: true,
     });
     if (!ok) return;
-    dispatch({
-      type: 'FINALIZE',
-      payload: { sessionId: s.id, reason: 'completed' },
-    });
+    dispatch({ type: 'FINALIZE', payload: { sessionId: s.id, reason: 'completed' } });
     notifyNextInWaitlist(s.table_id);
     toast.show('Session ended · Table released', 'info');
   }, [state, dispatch, confirm, notifyNextInWaitlist, toast]);
@@ -209,6 +186,7 @@ export function RootNavigator() {
     [dispatch, toast]
   );
 
+  /** Shared table-press logic — used by both MapScreen taps and ScanScreen hits. */
   const handleTablePress = useCallback(
     async (tableId: string) => {
       const table = state.tables.find(t => t.id === tableId);
@@ -243,12 +221,8 @@ export function RootNavigator() {
         return;
       }
 
-      // Occupied → waitlist
       const existing = state.waitlist.find(
-        w =>
-          w.table_id === tableId &&
-          w.user_id === state.currentUserId &&
-          w.status === 'waiting'
+        w => w.table_id === tableId && w.user_id === state.currentUserId && w.status === 'waiting'
       );
 
       if (existing) {
@@ -285,10 +259,7 @@ export function RootNavigator() {
 
   const handlePickHostel = useCallback(
     (spaceId: string) => {
-      dispatch({
-        type: 'SET_HOSTEL',
-        payload: { userId: state.currentUserId, spaceId },
-      });
+      dispatch({ type: 'SET_HOSTEL', payload: { userId: state.currentUserId, spaceId } });
       setHostelPickerOpen(false);
       toast.show(`Home set · ${findSpace(spaceId)?.name}`, 'success');
     },
@@ -332,6 +303,23 @@ export function RootNavigator() {
     toast.show('Reset complete', 'info');
   }, [confirm, dispatch, toast]);
 
+  /** Called by ScanScreen. Returns true if we handled the payload. */
+  const handleScan = useCallback(
+    (data: string): boolean => {
+      const table = state.tables.find(t => t.id === data);
+      if (!table) {
+        toast.show('Not a study table', 'error');
+        return false; // keep scanning
+      }
+      // Route through the shared logic. This may be async (confirm dialog),
+      // but we return synchronously so the scanner locks — the async
+      // continuation will fire the dialog after the screen pops.
+      handleTablePress(table.id);
+      return true;
+    },
+    [state.tables, handleTablePress, toast]
+  );
+
   // Session header values
   const sessionVariant: 'default' | 'away' | 'grace' = (() => {
     const s = myActiveSession(state);
@@ -341,11 +329,9 @@ export function RootNavigator() {
   })();
 
   const sessionTitle =
-    sessionVariant === 'away'
-      ? 'Away'
-      : sessionVariant === 'grace'
-      ? 'Grace'
-      : 'My Session';
+    sessionVariant === 'away' ? 'Away'
+    : sessionVariant === 'grace' ? 'Grace'
+    : 'My Session';
 
   const sessionSubtitle = (() => {
     const s = myActiveSession(state);
@@ -356,47 +342,47 @@ export function RootNavigator() {
   })();
 
   // ─── Tabs ───
-const Tabs = () => (
+  const Tabs = () => (
     <Tab.Navigator
-  tabBar={props => <TabBar {...props} />}
-  screenOptions={({ route }) => ({
-    headerShown: false,
-    tabBarBadge:
-      route.name === 'Session' && hasSession
-        ? '●'
-        : route.name === 'Wait' && waitCount > 0
-        ? waitCount
-        : undefined,
-    tabBarBadgeStyle: {
-      backgroundColor:
-        route.name === 'Session' ? theme.colors.green : theme.colors.red,
-      color: route.name === 'Session' ? '#061a0d' : '#fff',
-      fontFamily: theme.fonts.monoBold,
-      fontSize: 9,
-    },
-  })}
-  initialRouteName={hasSession ? 'Session' : 'Home'}
->
+      tabBar={props => <TabBar {...props} />}
+      screenOptions={({ route }) => ({
+        headerShown: false,
+        tabBarBadge:
+          route.name === 'Session' && hasSession ? '●'
+          : route.name === 'Wait' && waitCount > 0 ? waitCount
+          : undefined,
+        tabBarBadgeStyle: {
+          backgroundColor: route.name === 'Session' ? theme.colors.green : theme.colors.red,
+          color: route.name === 'Session' ? '#061a0d' : '#fff',
+          fontFamily: theme.fonts.monoBold,
+          fontSize: 9,
+        },
+      })}
+      initialRouteName={hasSession ? 'Session' : 'Home'}
+    >
       <Tab.Screen
         name="Home"
         children={({ navigation }) => (
           <>
             <AppHeader
-              title="Home"
-              subtitle="Library & your hostel"
+              title={admin ? 'Admin' : 'Home'}
+              subtitle={admin ? 'Occupancy & utilization' : 'Library & your hostel'}
               user={user}
               onUserPress={handleUserPress}
             />
-            <HomeScreen
-              onOpenSpace={id =>
-                navigation.getParent()?.navigate('Map', { spaceId: id })
-              }
-              onOpenBrowse={() => navigation.getParent()?.navigate('Browse')}
-              onSetHostel={handleSetHostel}
-            />
+            {admin ? (
+              <AdminScreen onUnlock={handleUnlockAdmin} onReset={handleReset} />
+            ) : (
+              <HomeScreen
+                onOpenSpace={id => navigation.getParent()?.navigate('Map', { spaceId: id })}
+                onOpenBrowse={() => navigation.getParent()?.navigate('Browse')}
+                onSetHostel={handleSetHostel}
+              />
+            )}
           </>
         )}
       />
+
       <Tab.Screen
         name="Session"
         children={() => (
@@ -416,6 +402,7 @@ const Tabs = () => (
           </>
         )}
       />
+
       <Tab.Screen
         name="Wait"
         children={() => (
@@ -430,17 +417,25 @@ const Tabs = () => (
           </>
         )}
       />
+
       <Tab.Screen
-        name="Admin"
-        children={() => (
+        name="Scan"
+        children={({ navigation }) => (
           <>
             <AppHeader
-              title="Admin"
-              subtitle="Occupancy & utilization"
+              title="Scan"
+              subtitle="Point at a table QR"
               user={user}
               onUserPress={handleUserPress}
             />
-            <AdminScreen onUnlock={handleUnlockAdmin} onReset={handleReset} />
+            <ScanScreen
+              onScan={data => {
+                const handled = handleScan(data);
+                if (handled) navigation.goBack?.();
+                return handled;
+              }}
+              onExit={() => navigation.navigate('Home')}
+            />
           </>
         )}
       />
@@ -456,9 +451,7 @@ const Tabs = () => (
         user={user}
         onUserPress={handleUserPress}
       />
-      <BrowseScreen
-        onOpenSpace={id => navigation.navigate('Map', { spaceId: id })}
-      />
+      <BrowseScreen onOpenSpace={id => navigation.navigate('Map', { spaceId: id })} />
     </>
   );
 
@@ -498,14 +491,24 @@ const Tabs = () => (
         items={[
           {
             label: 'Change hostel',
-            hint: myHostelId(state)
-              ? findSpace(myHostelId(state)!)?.name
-              : 'Not set',
+            hint: myHostelId(state) ? findSpace(myHostelId(state)!)?.name : 'Not set',
             onSelect: () => {
               setAccountMenuOpen(false);
               setTimeout(() => setHostelPickerOpen(true), 200);
             },
           },
+          ...(!admin
+            ? [
+                {
+                  label: 'Unlock Admin',
+                  hint: 'passcode',
+                  onSelect: () => {
+                    setAccountMenuOpen(false);
+                    setTimeout(() => setPasscodeOpen(true), 200);
+                  },
+                },
+              ]
+            : []),
           {
             label: 'Switch user',
             hint: 'demo',
@@ -571,11 +574,9 @@ const Tabs = () => (
   );
 }
 
-// Seed helper — matches store's initial state
 function seedFreshState() {
   const tables = SPACES.flatMap(space => {
-    const prefix =
-      space.type === 'library' ? 'L' : space.id.slice(0, 2).toUpperCase();
+    const prefix = space.type === 'library' ? 'L' : space.id.slice(0, 2).toUpperCase();
     return Array.from({ length: space.tables }, (_, i) => {
       const label = `${prefix}-${String(i + 1).padStart(2, '0')}`;
       return {
