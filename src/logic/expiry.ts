@@ -9,7 +9,17 @@ export function computeExpiryActions(state: AppState) {
   const actions: any[] = [];
   const now = Date.now();
 
-  // Break → grace → expire
+  // Reservations
+  state.reservations.forEach(r => {
+    if (now > new Date(r.expires_at).getTime()) {
+      actions.push({
+        type: 'RESERVATION_EXPIRED',
+        payload: { reservationId: r.id },
+      });
+    }
+  });
+
+  // Sessions
   state.sessions.forEach(session => {
     if (session.status === 'on_break') {
       const breakEnd = new Date(session.break_ends_at!).getTime();

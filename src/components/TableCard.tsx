@@ -10,6 +10,7 @@ interface Props {
   isMine?: boolean;
   breakRemainingSec?: number | null;
   graceRemainingSec?: number | null;
+  reserveRemainingSec?: number | null;
   onPress: () => void;
 }
 
@@ -19,33 +20,54 @@ export function TableCard({
   isMine,
   breakRemainingSec,
   graceRemainingSec,
+  reserveRemainingSec,
   onPress,
 }: Props) {
   const accent =
     table.status === 'available' ? theme.colors.green
+    : table.status === 'reserved' ? theme.colors.blue
     : table.status === 'occupied' ? theme.colors.red
     : theme.colors.yellow;
 
   const statusLabel =
     table.status === 'available' ? 'Available'
+    : table.status === 'reserved' ? 'Reserved'
     : table.status === 'occupied' ? 'Occupied'
     : 'Away';
+
+  const mineBorder =
+    isMine && table.status === 'reserved'
+      ? { borderColor: theme.colors.blue }
+      : isMine
+      ? { borderColor: theme.colors.green }
+      : null;
 
   return (
     <Pressable
       onPress={onPress}
-      style={({ pressed }) => [
-        styles.card,
-        isMine && styles.mine,
-        pressed && styles.pressed,
-      ]}
+      style={({ pressed }) => [styles.card, mineBorder, pressed && styles.pressed]}
     >
       <View style={[styles.topBar, { backgroundColor: accent }]} />
       <Text style={styles.label}>{table.label}</Text>
       <Text style={[styles.status, { color: accent }]}>{statusLabel}</Text>
-      {ownerId && !isMine && <Text style={styles.owner}>{ownerId}</Text>}
-      {isMine && <Text style={[styles.owner, { color: theme.colors.green }]}>You</Text>}
 
+      {ownerId && !isMine && <Text style={styles.owner}>{ownerId}</Text>}
+      {isMine && (
+        <Text
+          style={[
+            styles.owner,
+            { color: table.status === 'reserved' ? theme.colors.blue : theme.colors.green },
+          ]}
+        >
+          You
+        </Text>
+      )}
+
+      {reserveRemainingSec != null && (
+        <Text style={[styles.extra, { color: theme.colors.blue }]}>
+          SCAN IN {formatTime(reserveRemainingSec)}
+        </Text>
+      )}
       {breakRemainingSec != null && (
         <Text style={styles.extra}>◷ {formatTime(breakRemainingSec)}</Text>
       )}
@@ -68,9 +90,6 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     position: 'relative',
     minHeight: 92,
-  },
-  mine: {
-    borderColor: theme.colors.green,
   },
   pressed: { opacity: 0.85, transform: [{ scale: 0.98 }] },
   topBar: {

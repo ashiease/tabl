@@ -4,6 +4,7 @@ import {
   Pressable,
   StyleSheet,
   Text,
+  useWindowDimensions,
   View,
 } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
@@ -12,19 +13,21 @@ import * as Haptics from 'expo-haptics';
 import { theme } from '../constants/theme';
 
 interface Props {
-  /** Called with the raw scanned string. Returns true if the caller handled it
-   *  (scanner should lock/close); false if the payload was rejected and the
-   *  scanner should keep running. */
   onScan: (data: string) => boolean;
   onExit: () => void;
+  /** If set, shows a blue banner above the frame with the reserve countdown. */
+  reservationLabel?: string | null;
 }
 
-export function ScanScreen({ onScan, onExit }: Props) {
+const FRAME = 240;
+const MASK_COLOR = '#000000';
+
+export function ScanScreen({ onScan, onExit, reservationLabel }: Props) {
   const insets = useSafeAreaInsets();
+  const { width: screenW, height: screenH } = useWindowDimensions();
   const [permission, requestPermission] = useCameraPermissions();
   const qrLock = useRef(false);
 
-  // Auto-request permission on first mount
   useEffect(() => {
     if (permission && !permission.granted && permission.canAskAgain) {
       requestPermission();
@@ -40,9 +43,7 @@ export function ScanScreen({ onScan, onExit }: Props) {
 
       if (handled) {
         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
-        // Caller will unmount us; no need to unlock.
       } else {
-        // Let the user try again after a beat
         setTimeout(() => {
           qrLock.current = false;
         }, 1500);
@@ -51,12 +52,8 @@ export function ScanScreen({ onScan, onExit }: Props) {
     [onScan]
   );
 
-  // Permission not yet determined — show nothing while OS prompt is pending
-  if (!permission) {
-    return <View style={styles.root} />;
-  }
+  if (!permission) return <View style={styles.root} />;
 
-  // Permission denied — show recovery UI
   if (!permission.granted) {
     return (
       <View style={[styles.root, styles.errorWrap, { paddingTop: insets.top + 20 }]}>
@@ -85,6 +82,9 @@ export function ScanScreen({ onScan, onExit }: Props) {
     );
   }
 
+  const windowTop = (screenH - FRAME) / 2 - 80;
+  const windowLeft = (screenW - FRAME) / 2;
+
   return (
     <View style={styles.root}>
       <CameraView
@@ -94,15 +94,49 @@ export function ScanScreen({ onScan, onExit }: Props) {
         onBarcodeScanned={handleScanned}
       />
 
-      {/* Dark mask with a transparent cutout for the frame.
-          The maskHole is FRAME×FRAME and centered; its huge border
-          paints the dark overlay all the way past the screen edges. */}
-      <View style={styles.maskWrap} pointerEvents="none">
-        <View style={styles.maskHole} />
-      </View>
+      {/* Top mask */}
+      <View
+        pointerEvents="none"
+        style={[styles.maskStrip, { top: 0.1, left: 0, right: 0, height: windowTop }]}
+      />
+      {/* Bottom mask */}
+      <View
+        pointerEvents="none"
+        style={[
+          styles.maskStrip,
+          { top: windowTop + FRAME, left: 0, right: 0, bottom: 0 },
+        ]}
+      />
+      {/* Left mask */}
+      <View
+        pointerEvents="none"
+        style={[
+          styles.maskStrip,
+          { top: windowTop, left: 0, width: windowLeft, height: FRAME },
+        ]}
+      />
+      {/* Right mask */}
+      <View
+        pointerEvents="none"
+        style={[
+          styles.maskStrip,
+          {
+            top: windowTop,
+            left: windowLeft + FRAME,
+            right: 0,
+            height: FRAME,
+          },
+        ]}
+      />
 
       {/* Corner frame */}
-      <View style={styles.frame} pointerEvents="none">
+      <View
+        pointerEvents="none"
+        style={[
+          styles.frame,
+          { top: windowTop, left: windowLeft, width: FRAME, height: FRAME },
+        ]}
+      >
         <View style={[styles.corner, styles.tl]} />
         <View style={[styles.corner, styles.tr]} />
         <View style={[styles.corner, styles.bl]} />
@@ -118,6 +152,14 @@ export function ScanScreen({ onScan, onExit }: Props) {
         <Text style={styles.title}>SCAN TABLE</Text>
       </View>
 
+      {/* Reservation banner */}
+      {reservationLabel && (
+        <View style={[styles.reserveBanner, { top: insets.top + 52 }]}>
+          <View style={styles.reserveBar} />
+          <Text style={styles.reserveText}>{reservationLabel}</Text>
+        </View>
+      )}
+
       {/* Bottom caption */}
       <View style={[styles.bottomBar, { paddingBottom: insets.bottom + 32 }]}>
         <Text style={styles.caption}>
@@ -128,7 +170,6 @@ export function ScanScreen({ onScan, onExit }: Props) {
   );
 }
 
-/** Animated horizontal line sweeping up and down inside the frame. */
 function ScanLine() {
   const [y, setY] = useState(0);
   const [dir, setDir] = useState<1 | -1>(1);
@@ -154,88 +195,39 @@ function ScanLine() {
   return <View style={[styles.scanLine, { top: y }]} pointerEvents="none" />;
 }
 
-const FRAME = 240;
-
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: '#000' },
 
-  // Dark mask — a centered FRAME×FRAME View whose enormous border
-  // paints the dim overlay everywhere outside the frame.
-  maskWrap: {
-    ...StyleSheet.absoluteFill,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  maskHole: {
-    width: FRAME,
-    height: FRAME,
-    borderWidth: 2000,
-    borderColor: 'rgba(0,0,0,0.55)',
-  },
+  maskStrip: { position: 'absolute', backgroundColor: 'rgba(0,0,0,0.75)' },
 
-  // The visible frame
-  frame: {
-    position: 'absolute',
-    top: '50%',
-    left: '50%',
-    width: FRAME,
-    height: FRAME,
-    marginTop: -FRAME / 2,
-    marginLeft: -FRAME / 2,
-    overflow: 'hidden',
-  },
-  corner: {
-    position: 'absolute',
-    width: 32,
-    height: 32,
-  },
+  frame: { position: 'absolute', overflow: 'hidden' },
+  corner: { position: 'absolute', width: 32, height: 32 },
   tl: {
-    top: 0,
-    left: 0,
-    borderTopWidth: 3,
-    borderLeftWidth: 3,
-    borderTopColor: theme.colors.green,
-    borderLeftColor: theme.colors.green,
+    top: 0, left: 0, borderTopWidth: 3, borderLeftWidth: 3,
+    borderTopColor: theme.colors.green, borderLeftColor: theme.colors.green,
   },
   tr: {
-    top: 0,
-    right: 0,
-    borderTopWidth: 3,
-    borderRightWidth: 3,
-    borderTopColor: theme.colors.green,
-    borderRightColor: theme.colors.green,
+    top: 0, right: 0, borderTopWidth: 3, borderRightWidth: 3,
+    borderTopColor: theme.colors.green, borderRightColor: theme.colors.green,
   },
   bl: {
-    bottom: 0,
-    left: 0,
-    borderBottomWidth: 3,
-    borderLeftWidth: 3,
-    borderBottomColor: theme.colors.green,
-    borderLeftColor: theme.colors.green,
+    bottom: 0, left: 0, borderBottomWidth: 3, borderLeftWidth: 3,
+    borderBottomColor: theme.colors.green, borderLeftColor: theme.colors.green,
   },
   br: {
-    bottom: 0,
-    right: 0,
-    borderBottomWidth: 3,
-    borderRightWidth: 3,
-    borderBottomColor: theme.colors.green,
-    borderRightColor: theme.colors.green,
+    bottom: 0, right: 0, borderBottomWidth: 3, borderRightWidth: 3,
+    borderBottomColor: theme.colors.green, borderRightColor: theme.colors.green,
   },
   scanLine: {
     position: 'absolute',
-    left: 8,
-    right: 8,
-    height: 2,
+    left: 8, right: 8, height: 2,
     backgroundColor: theme.colors.green,
     opacity: 0.85,
   },
 
-  // Top bar
   topBar: {
     position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
+    top: 0, left: 0, right: 0,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
@@ -255,12 +247,37 @@ const styles = StyleSheet.create({
     letterSpacing: 1.5,
   },
 
-  // Bottom caption
+  reserveBanner: {
+    position: 'absolute',
+    left: 16, right: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(10,10,10,0.95)',
+    borderWidth: 1,
+    borderColor: theme.colors.borderBright,
+    borderRadius: theme.radius,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    gap: 10,
+  },
+  reserveBar: {
+    width: 3, height: '100%',
+    backgroundColor: theme.colors.blue,
+    borderRadius: 2,
+    marginRight: 4,
+  },
+  reserveText: {
+    flex: 1,
+    fontFamily: theme.fonts.monoBold,
+    fontSize: 10,
+    color: theme.colors.blue,
+    letterSpacing: 2,
+    textTransform: 'uppercase',
+  },
+
   bottomBar: {
     position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
+    bottom: 0, left: 0, right: 0,
     alignItems: 'center',
     paddingHorizontal: 40,
   },
@@ -273,48 +290,31 @@ const styles = StyleSheet.create({
     lineHeight: 18,
   },
 
-  // Permission denied
   errorWrap: { padding: 20 },
   errorCenter: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
+    flex: 1, alignItems: 'center', justifyContent: 'center',
     paddingHorizontal: 40,
   },
   errorIcon: {
-    fontSize: 40,
-    color: theme.colors.yellow,
-    marginBottom: 20,
-    fontFamily: theme.fonts.mono,
+    fontSize: 40, color: theme.colors.yellow,
+    marginBottom: 20, fontFamily: theme.fonts.mono,
   },
   errorTitle: {
-    fontFamily: theme.fonts.monoBold,
-    fontSize: 12,
-    color: theme.colors.text,
-    letterSpacing: 2.5,
-    marginBottom: 12,
+    fontFamily: theme.fonts.monoBold, fontSize: 12,
+    color: theme.colors.text, letterSpacing: 2.5, marginBottom: 12,
   },
   errorSub: {
-    fontFamily: theme.fonts.mono,
-    fontSize: 10,
-    color: theme.colors.textDim,
-    letterSpacing: 1.5,
-    textAlign: 'center',
-    lineHeight: 18,
-    marginBottom: 28,
+    fontFamily: theme.fonts.mono, fontSize: 10,
+    color: theme.colors.textDim, letterSpacing: 1.5,
+    textAlign: 'center', lineHeight: 18, marginBottom: 28,
   },
   settingsBtn: {
-    paddingVertical: 14,
-    paddingHorizontal: 24,
-    borderWidth: 1,
-    borderColor: theme.colors.borderBright,
-    borderRadius: theme.radius,
-    backgroundColor: 'transparent',
+    paddingVertical: 14, paddingHorizontal: 24,
+    borderWidth: 1, borderColor: theme.colors.borderBright,
+    borderRadius: theme.radius, backgroundColor: 'transparent',
   },
   settingsText: {
-    fontFamily: theme.fonts.monoBold,
-    fontSize: 11,
-    color: theme.colors.text,
-    letterSpacing: 2,
+    fontFamily: theme.fonts.monoBold, fontSize: 11,
+    color: theme.colors.text, letterSpacing: 2,
   },
 });

@@ -11,6 +11,7 @@ export const theme = {
       green: '#22c55e',
       red: '#ef4444',
       yellow: '#eab308',
+      blue: '#3b82f6',
     },
     fonts: {
       dot: 'DotGothic16_400Regular',

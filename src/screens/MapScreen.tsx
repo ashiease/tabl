@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useStore } from '../state/store';
-import { sessionForTable, tablesInSpace } from '../state/selectors';
+import { sessionForTable, reservationForTable, tablesInSpace } from '../state/selectors';
 import { findSpace } from '../constants/spaces';
 import { theme } from '../constants/theme';
 import { TableCard } from '../components/TableCard';
@@ -37,15 +37,20 @@ export function MapScreen({ spaceId, onTablePress }: Props) {
       <View style={styles.grid}>
         {tables.map(table => {
           const session = sessionForTable(state, table.id);
+          const reservation = reservationForTable(state, table.id);
           const isMine = session?.user_id === state.currentUserId;
+          const isMyReservation = reservation?.user_id === state.currentUserId;
 
           let breakRemainingSec: number | null = null;
           let graceRemainingSec: number | null = null;
+          let reserveRemainingSec: number | null = null;
 
           if (session?.status === 'on_break' && session.break_ends_at) {
             breakRemainingSec = secondsUntil(session.break_ends_at);
           } else if (session?.status === 'on_break_expired' && session.grace_ends_at) {
             graceRemainingSec = secondsUntil(session.grace_ends_at);
+          } else if (reservation) {
+            reserveRemainingSec = secondsUntil(reservation.expires_at);
           }
 
           return (
@@ -53,9 +58,10 @@ export function MapScreen({ spaceId, onTablePress }: Props) {
               <TableCard
                 table={table}
                 ownerId={session && !isMine ? session.user_id : null}
-                isMine={!!isMine}
+                isMine={!!isMine || !!isMyReservation}
                 breakRemainingSec={breakRemainingSec}
                 graceRemainingSec={graceRemainingSec}
+                reserveRemainingSec={reserveRemainingSec}
                 onPress={() => onTablePress(table.id)}
               />
             </View>
@@ -65,6 +71,7 @@ export function MapScreen({ spaceId, onTablePress }: Props) {
 
       <View style={styles.legend}>
         <Legend color={theme.colors.green} label="Available" />
+        <Legend color={theme.colors.blue} label="Reserved" />
         <Legend color={theme.colors.red} label="Occupied" />
         <Legend color={theme.colors.yellow} label="Away" />
       </View>

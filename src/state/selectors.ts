@@ -1,10 +1,8 @@
-import { AppState, Session, Table, WaitlistEntry } from '../types';
+import { AppState, Session, WaitlistEntry } from '../types';
 
-export const currentUser = (s: AppState) =>
-  s.currentUserId;
+export const currentUser = (s: AppState) => s.currentUserId;
 
-export const isAdmin = (s: AppState) =>
-  s.currentUserId.startsWith('ADM');
+export const isAdmin = (s: AppState) => s.currentUserId.startsWith('ADM');
 
 export const myHostelId = (s: AppState) =>
   s.hostelsByUser[s.currentUserId] ?? null;
@@ -26,6 +24,12 @@ export const sessionForTable = (s: AppState, tableId: string) =>
         x.status === 'on_break' ||
         x.status === 'on_break_expired')
   );
+
+export const myReservation = (s: AppState) =>
+  s.reservations.find(r => r.user_id === s.currentUserId);
+
+export const reservationForTable = (s: AppState, tableId: string) =>
+  s.reservations.find(r => r.table_id === tableId);
 
 export const tablesInSpace = (s: AppState, spaceId: string) =>
   s.tables.filter(t => t.space_id === spaceId);

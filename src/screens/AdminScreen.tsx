@@ -29,18 +29,22 @@ export function AdminScreen({ onUnlock, onReset }: Props) {
 
   const total = state.tables.length;
   const available = state.tables.filter(t => t.status === 'available').length;
+  const reserved = state.tables.filter(t => t.status === 'reserved').length;
   const occupied = state.tables.filter(t => t.status === 'occupied').length;
   const onBreak = state.tables.filter(t => t.status === 'on_break').length;
   const expired = state.sessions.filter(s => s.status === 'expired').length;
   const completed = state.sessions.filter(s => s.status === 'completed').length;
   const activeWait = state.waitlist.filter(w => w.status !== 'expired').length;
-  const occupancy = total ? Math.round(((occupied + onBreak) / total) * 100) : 0;
+  const occupancy = total
+    ? Math.round(((reserved + occupied + onBreak) / total) * 100)
+    : 0;
 
   return (
     <ScrollView contentContainerStyle={styles.container}>
       <SectionLabel label="Global" />
       <View style={styles.statGrid}>
         <Stat label="Available" value={available} color={theme.colors.green} />
+        <Stat label="Reserved" value={reserved} color={theme.colors.blue} />
         <Stat label="Occupied" value={occupied} color={theme.colors.red} />
         <Stat label="Away" value={onBreak} color={theme.colors.yellow} />
         <Stat label="In Queue" value={activeWait} />
@@ -56,9 +60,22 @@ export function AdminScreen({ onUnlock, onReset }: Props) {
 
       <SectionLabel label="Per Space" />
       <View style={styles.infoCard}>
+        <View style={[styles.row, { opacity: 0.6 }]}>
+          <Text style={styles.key}>Legend</Text>
+          <Text style={styles.valueSmall}>
+            <Text style={{ color: theme.colors.green }}>free</Text>
+            <Text style={{ color: theme.colors.textFaint }}> · </Text>
+            <Text style={{ color: theme.colors.blue }}>res</Text>
+            <Text style={{ color: theme.colors.textFaint }}> · </Text>
+            <Text style={{ color: theme.colors.red }}>occ</Text>
+            <Text style={{ color: theme.colors.textFaint }}> · </Text>
+            <Text style={{ color: theme.colors.yellow }}>away</Text>
+          </Text>
+        </View>
         {SPACES.map(space => {
           const t = tablesInSpace(state, space.id);
           const a = t.filter(x => x.status === 'available').length;
+          const r = t.filter(x => x.status === 'reserved').length;
           const o = t.filter(x => x.status === 'occupied').length;
           const b = t.filter(x => x.status === 'on_break').length;
           return (
@@ -66,6 +83,8 @@ export function AdminScreen({ onUnlock, onReset }: Props) {
               <Text style={styles.key}>{space.name}</Text>
               <Text style={styles.valueSmall}>
                 <Text style={{ color: theme.colors.green }}>{a}</Text>
+                <Text style={{ color: theme.colors.textFaint }}> · </Text>
+                <Text style={{ color: theme.colors.blue }}>{r}</Text>
                 <Text style={{ color: theme.colors.textFaint }}> · </Text>
                 <Text style={{ color: theme.colors.red }}>{o}</Text>
                 <Text style={{ color: theme.colors.textFaint }}> · </Text>
@@ -81,6 +100,7 @@ export function AdminScreen({ onUnlock, onReset }: Props) {
         <Row k="Session length" v="60 min" valueColor={theme.colors.green} />
         <Row k="Break length" v="15 min" valueColor={theme.colors.yellow} />
         <Row k="Grace period" v="5 min" valueColor={theme.colors.red} />
+        <Row k="Reservation window" v="5 min" valueColor={theme.colors.blue} />
       </View>
 
       <Button

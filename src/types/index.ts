@@ -1,5 +1,5 @@
 export type SpaceType = 'library' | 'hostel';
-export type TableStatus = 'available' | 'occupied' | 'on_break';
+export type TableStatus = 'available' | 'reserved' | 'occupied' | 'on_break';
 export type SessionStatus =
   | 'active'
   | 'on_break'
@@ -38,6 +38,15 @@ export interface Session {
   grace_ends_at: string | null;
 }
 
+export interface Reservation {
+  id: string;
+  table_id: string;
+  space_id: string;
+  user_id: string;
+  created_at: string;
+  expires_at: string;
+}
+
 export interface WaitlistEntry {
   id: string;
   table_id: string;
@@ -58,6 +67,7 @@ export interface User {
 export interface AppState {
   tables: Table[];
   sessions: Session[];
+  reservations: Reservation[];
   waitlist: WaitlistEntry[];
   hostelsByUser: Record<string, string>;
   currentUserId: string;
