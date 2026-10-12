@@ -1,18 +1,17 @@
 import React from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useStore } from '../state/store';
 import { myHostelId, spaceCounts } from '../state/selectors';
-import { SPACES, findSpace } from '../constants/spaces';
+import { findSpace } from '../constants/spaces';
 import { theme } from '../constants/theme';
 import { HeroCard } from '../components/HeroCard';
 
 interface Props {
   onOpenSpace: (id: string) => void;
-  onOpenBrowse: () => void;
   onSetHostel: () => void;
 }
 
-export function HomeScreen({ onOpenSpace, onOpenBrowse, onSetHostel }: Props) {
+export function HomeScreen({ onOpenSpace, onSetHostel }: Props) {
   const { state } = useStore();
   const hostelId = myHostelId(state);
   const hostel = hostelId ? findSpace(hostelId) : null;
@@ -40,15 +39,6 @@ export function HomeScreen({ onOpenSpace, onOpenBrowse, onSetHostel }: Props) {
           onPress={() => onOpenSpace(library.id)}
         />
       </View>
-
-      <Pressable
-        onPress={onOpenBrowse}
-        style={({ pressed }) => [styles.browseLink, pressed && { opacity: 0.7 }]}
-      >
-        <Text style={styles.arrow}>▸</Text>
-        <Text style={styles.browseText}>ALL SPACES</Text>
-        <Text style={styles.browseCount}>{SPACES.length}</Text>
-      </Pressable>
     </ScrollView>
   );
 }
@@ -77,26 +67,4 @@ const styles = StyleSheet.create({
   },
   line: { flex: 1, height: 1, backgroundColor: theme.colors.border },
   grid: { flexDirection: 'row', gap: 8 },
-  browseLink: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginTop: 18,
-    paddingTop: 12,
-    borderTopWidth: 1,
-    borderTopColor: theme.colors.border,
-  },
-  arrow: { color: theme.colors.green, fontFamily: theme.fonts.monoBold },
-  browseText: {
-    flex: 1,
-    fontFamily: theme.fonts.monoBold,
-    fontSize: 10,
-    color: theme.colors.textDim,
-    letterSpacing: 2.5,
-  },
-  browseCount: {
-    fontFamily: theme.fonts.mono,
-    fontSize: 10,
-    color: theme.colors.textFaint,
-  },
 });

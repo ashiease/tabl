@@ -22,7 +22,7 @@ import {
 import { theme } from '../constants/theme';
 import { newId, makeBreakEnd } from '../logic/sessions';
 import { computeExpiryActions } from '../logic/expiry';
-import { goToTab } from './navRef';
+import { goToTab, goToHome } from './navRef';
 import { formatTime, secondsUntil } from '../utils/time';
 
 // Screens
@@ -45,7 +45,7 @@ import { useToast } from '../components/Toast';
 import { User } from '../types';
 
 const Tab = createBottomTabNavigator();
-const Stack = createNativeStackNavigator();
+const HomeStack = createNativeStackNavigator();
 
 export function RootNavigator() {
   const { state, dispatch } = useStore();
@@ -482,28 +482,11 @@ export function RootNavigator() {
     return `${space?.name} · ${table?.label}`;
   })();
 
-  // ─── Tabs ───
-  const Tabs = () => (
-    <Tab.Navigator
-      tabBar={props => <TabBar {...props} />}
-      screenOptions={({ route }) => ({
-        headerShown: false,
-        tabBarBadge:
-          route.name === 'Session' && hasSession ? '●'
-          : route.name === 'Wait' && waitCount > 0 ? waitCount
-          : undefined,
-        tabBarBadgeStyle: {
-          backgroundColor: route.name === 'Session' ? theme.colors.green : theme.colors.red,
-          color: route.name === 'Session' ? '#061a0d' : '#fff',
-          fontFamily: theme.fonts.monoBold,
-          fontSize: 9,
-        },
-      })}
-      initialRouteName={hasSession ? 'Session' : myRes ? 'Scan' : 'Home'}
-    >
-      <Tab.Screen
-        name="Home"
-        children={({ navigation }) => (
+  // ─── Home nested stack (Home / Browse / Map) ───
+  const HomeStackNavigator = () => (
+    <HomeStack.Navigator screenOptions={{ headerShown: false }}>
+      <HomeStack.Screen name="HomeMain">
+        {({ navigation }) => (
           <>
             <AppHeader
               title={admin ? 'Admin' : 'Home'}
@@ -515,104 +498,123 @@ export function RootNavigator() {
               <AdminScreen onUnlock={handleUnlockAdmin} onReset={handleReset} />
             ) : (
               <HomeScreen
-                onOpenSpace={id => navigation.getParent()?.navigate('Map', { spaceId: id })}
-                onOpenBrowse={() => navigation.getParent()?.navigate('Browse')}
+                onOpenSpace={id => navigation.navigate('Map', { spaceId: id })}
                 onSetHostel={handleSetHostel}
               />
             )}
           </>
         )}
-      />
+      </HomeStack.Screen>
 
-      <Tab.Screen
-        name="Session"
-        children={() => (
+      <HomeStack.Screen name="Browse">
+        {({ navigation }) => (
           <>
             <AppHeader
-              title={sessionTitle}
-              subtitle={sessionSubtitle}
-              titleVariant={sessionVariant}
+              title="All Spaces"
+              subtitle="Library & 13 hostels"
               user={user}
               onUserPress={handleUserPress}
             />
-            <SessionScreen
-              onStartBreak={startBreak}
-              onEndBreak={endBreak}
-              onEndSession={endSession}
+            <BrowseScreen
+              onOpenSpace={id => navigation.navigate('Map', { spaceId: id })}
             />
           </>
         )}
-      />
+      </HomeStack.Screen>
 
-      <Tab.Screen
-        name="Wait"
-        children={() => (
-          <>
-            <AppHeader
-              title="Waitlist"
-              subtitle="Your queued tables"
-              user={user}
-              onUserPress={handleUserPress}
-            />
-            <WaitlistScreen onLeave={leaveWaitlist} />
-          </>
-        )}
-      />
-
-      <Tab.Screen name="Scan">
-        {() => (
-          <ScanTabContent
-            user={user}
-            onUserPress={handleUserPress}
-            onScan={handleScan}
-            onExit={() => goToTab('Home')}
-          />
-        )}
-      </Tab.Screen>
-    </Tab.Navigator>
+      <HomeStack.Screen
+        name="Map"
+        options={{ animation: 'fade' }} // fade, slide_from_right, slide_from_bottom, flip, none, default
+      >
+        {({ route }: any) => {
+          const spaceId = route.params?.spaceId as string;
+          const space = findSpace(spaceId);
+          return (
+            <>
+              <AppHeader
+                title={space?.name ?? 'Map'}
+                subtitle={space?.type === 'library' ? 'Library' : 'Hostel'}
+                user={user}
+                onUserPress={handleUserPress}
+              />
+              <MapScreen spaceId={spaceId} onTablePress={handleTablePress} />
+            </>
+          );
+        }}
+      </HomeStack.Screen>
+    </HomeStack.Navigator>
   );
 
-  // ─── Stack wrappers ───
-  const BrowseWrapper = ({ navigation }: any) => (
-    <>
-      <AppHeader
-        title="All Spaces"
-        subtitle="Library & 13 hostels"
-        user={user}
-        onUserPress={handleUserPress}
-      />
-      <BrowseScreen onOpenSpace={id => navigation.navigate('Map', { spaceId: id })} />
-    </>
-  );
-
-  const MapWrapper = ({ route }: any) => {
-    const spaceId = route.params?.spaceId as string;
-    const space = findSpace(spaceId);
-    return (
-      <>
-        <AppHeader
-          title={space?.name ?? 'Map'}
-          subtitle={space?.type === 'library' ? 'Library' : 'Hostel'}
-          user={user}
-          onUserPress={handleUserPress}
-        />
-        <MapScreen spaceId={spaceId} onTablePress={handleTablePress} />
-      </>
-    );
-  };
-
+  // ─── Tabs ───
   return (
     <>
-      <Stack.Navigator screenOptions={{ headerShown: false }}>
-        <Stack.Screen name="Tabs" component={Tabs} />
-        <Stack.Screen name="Browse" component={BrowseWrapper} />
-        <Stack.Screen
-          name="Map"
-          component={MapWrapper}
-          options={{ animation: 'slide_from_right' }}
-        />
-      </Stack.Navigator>
+      <Tab.Navigator
+        tabBar={props => <TabBar {...props} />}
+        screenOptions={({ route }) => ({
+          headerShown: false,
+          tabBarBadge:
+            route.name === 'Session' && hasSession ? '●'
+            : route.name === 'Wait' && waitCount > 0 ? waitCount
+            : undefined,
+          tabBarBadgeStyle: {
+            backgroundColor: route.name === 'Session' ? theme.colors.green : theme.colors.red,
+            color: route.name === 'Session' ? '#061a0d' : '#fff',
+            fontFamily: theme.fonts.monoBold,
+            fontSize: 9,
+          },
+        })}
+        initialRouteName={hasSession ? 'Session' : myRes ? 'Scan' : 'Home'}
+      >
+        <Tab.Screen name="Home" component={HomeStackNavigator} />
 
+        <Tab.Screen
+          name="Session"
+          children={() => (
+            <>
+              <AppHeader
+                title={sessionTitle}
+                subtitle={sessionSubtitle}
+                titleVariant={sessionVariant}
+                user={user}
+                onUserPress={handleUserPress}
+              />
+              <SessionScreen
+                onStartBreak={startBreak}
+                onEndBreak={endBreak}
+                onEndSession={endSession}
+              />
+            </>
+          )}
+        />
+
+        <Tab.Screen
+          name="Wait"
+          children={() => (
+            <>
+              <AppHeader
+                title="Waitlist"
+                subtitle="Your queued tables"
+                user={user}
+                onUserPress={handleUserPress}
+              />
+              <WaitlistScreen onLeave={leaveWaitlist} />
+            </>
+          )}
+        />
+
+        <Tab.Screen name="Scan">
+          {() => (
+            <ScanTabContent
+              user={user}
+              onUserPress={handleUserPress}
+              onScan={handleScan}
+              onExit={() => goToHome()}
+            />
+          )}
+        </Tab.Screen>
+      </Tab.Navigator>
+
+      {/* Global overlays */}
       <AccountMenu
         visible={accountMenuOpen}
         title="Account"
@@ -704,8 +706,8 @@ export function RootNavigator() {
 }
 
 /**
- * Scan tab content — separated into its own component so it can tick
- * every second and keep the reservation countdown live.
+ * Scan tab content — separated so it can tick every second and keep
+ * the reservation countdown live.
  */
 function ScanTabContent({
   user,
