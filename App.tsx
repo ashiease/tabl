@@ -4,8 +4,9 @@ import { StatusBar, StyleSheet, View } from 'react-native';
 import { NavigationContainer, DarkTheme } from '@react-navigation/native';
 import {
   useFonts,
-  DotGothic16_400Regular,
-} from '@expo-google-fonts/dotgothic16';
+  GeistMono_400Regular,
+  GeistMono_700Bold,
+} from '@expo-google-fonts/geist-mono';
 import {
   SpaceMono_400Regular,
   SpaceMono_700Bold,
@@ -19,7 +20,8 @@ import { theme } from './src/constants/theme';
 
 export default function App() {
   const [loaded] = useFonts({
-    DotGothic16_400Regular,
+    GeistMono_400Regular,
+    GeistMono_700Bold,
     SpaceMono_400Regular,
     SpaceMono_700Bold,
     Inter_400Regular,
