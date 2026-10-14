@@ -1,20 +1,21 @@
-import { AppState, Session, WaitlistEntry } from '../types';
+import { AppState, Session, WaitlistEntry, Profile } from '../types';
 
-export const currentUser = (s: AppState) => s.currentUserId;
+export const currentProfile = (s: AppState): Profile | null => s.profile;
 
-export const isAdmin = (s: AppState) => s.currentUserId.startsWith('ADM');
+export const isAdmin = (s: AppState) => s.profile?.role === 'admin';
 
-export const myHostelId = (s: AppState) =>
-  s.hostelsByUser[s.currentUserId] ?? null;
+export const myHostelId = (s: AppState) => s.profile?.hostel_id ?? null;
 
-export const myActiveSession = (s: AppState): Session | undefined =>
-  s.sessions.find(
+export const myActiveSession = (s: AppState): Session | undefined => {
+  if (!s.profile) return undefined;
+  return s.sessions.find(
     x =>
-      x.user_id === s.currentUserId &&
+      x.user_id === s.profile!.id &&
       (x.status === 'active' ||
         x.status === 'on_break' ||
         x.status === 'on_break_expired')
   );
+};
 
 export const sessionForTable = (s: AppState, tableId: string) =>
   s.sessions.find(
@@ -25,8 +26,10 @@ export const sessionForTable = (s: AppState, tableId: string) =>
         x.status === 'on_break_expired')
   );
 
-export const myReservation = (s: AppState) =>
-  s.reservations.find(r => r.user_id === s.currentUserId);
+export const myReservation = (s: AppState) => {
+  if (!s.profile) return undefined;
+  return s.reservations.find(r => r.user_id === s.profile!.id);
+};
 
 export const reservationForTable = (s: AppState, tableId: string) =>
   s.reservations.find(r => r.table_id === tableId);
@@ -54,7 +57,9 @@ export const queuePosition = (s: AppState, entryId: string) => {
 export const queueLength = (s: AppState, tableId: string) =>
   s.waitlist.filter(w => w.table_id === tableId && w.status === 'waiting').length;
 
-export const myWaitlist = (s: AppState): WaitlistEntry[] =>
-  s.waitlist.filter(
-    w => w.user_id === s.currentUserId && w.status !== 'expired'
+export const myWaitlist = (s: AppState): WaitlistEntry[] => {
+  if (!s.profile) return [];
+  return s.waitlist.filter(
+    w => w.user_id === s.profile!.id && w.status !== 'expired'
   );
+};

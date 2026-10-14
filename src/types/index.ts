@@ -8,6 +8,14 @@ export type SessionStatus =
   | 'expired';
 export type UserRole = 'student' | 'admin';
 
+export interface Profile {
+  id: string;
+  username: string;
+  display_name: string;
+  role: UserRole;
+  hostel_id: string | null;
+}
+
 export interface Space {
   id: string;
   name: string;
@@ -19,9 +27,9 @@ export interface Table {
   id: string;
   space_id: string;
   label: string;
-  qr_code: string;
   status: TableStatus;
   current_session_id: string | null;
+  updated_at: string;
 }
 
 export interface Session {
@@ -54,14 +62,8 @@ export interface WaitlistEntry {
   user_id: string;
   created_at: string;
   notified: boolean;
-  notified_at?: string;
+  notified_at?: string | null;
   status: 'waiting' | 'expired';
-}
-
-export interface User {
-  id: string;
-  name: string;
-  role: UserRole;
 }
 
 export interface AppState {
@@ -69,6 +71,5 @@ export interface AppState {
   sessions: Session[];
   reservations: Reservation[];
   waitlist: WaitlistEntry[];
-  hostelsByUser: Record<string, string>;
-  currentUserId: string;
+  profile: Profile | null;
 }

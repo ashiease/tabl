@@ -38,8 +38,8 @@ export function MapScreen({ spaceId, onTablePress }: Props) {
         {tables.map(table => {
           const session = sessionForTable(state, table.id);
           const reservation = reservationForTable(state, table.id);
-          const isMine = session?.user_id === state.currentUserId;
-          const isMyReservation = reservation?.user_id === state.currentUserId;
+          const isMine = session?.user_id === state.profile?.id;
+          const isMyReservation = reservation?.user_id === state.profile?.id;
 
           let breakRemainingSec: number | null = null;
           let graceRemainingSec: number | null = null;

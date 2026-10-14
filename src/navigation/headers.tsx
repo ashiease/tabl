@@ -2,13 +2,13 @@ import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { theme } from '../constants/theme';
-import { User } from '../types';
+import { Profile } from '../types';
 
 interface Props {
   title: string;
   subtitle: string;
   titleVariant?: 'default' | 'away' | 'grace';
-  user: User;
+  profile: Profile;
   onUserPress: () => void;
   showTopAccent?: boolean;
 }
@@ -17,7 +17,7 @@ export function AppHeader({
   title,
   subtitle,
   titleVariant = 'default',
-  user,
+  profile,
   onUserPress,
   showTopAccent = true,
 }: Props) {
@@ -47,10 +47,10 @@ export function AppHeader({
           <View
             style={[
               styles.roleDot,
-              user.role === 'admin' && { backgroundColor: theme.colors.red },
+              profile.role === 'admin' && { backgroundColor: theme.colors.red },
             ]}
           />
-          <Text style={styles.pillText}>{user.id}</Text>
+          <Text style={styles.pillText}>{profile.username}</Text>
         </Pressable>
       </View>
     </View>
@@ -82,7 +82,7 @@ const styles = StyleSheet.create({
   },
   left: { flex: 1 },
   title: {
-    fontFamily: theme.fonts.dot,
+    fontFamily: theme.fonts.display,
     fontSize: 24,
     letterSpacing: 1.5,
     lineHeight: 28,
@@ -117,6 +117,6 @@ const styles = StyleSheet.create({
     fontSize: 9,
     color: theme.colors.textDim,
     letterSpacing: 1,
-    textTransform: 'uppercase',
+    textTransform: 'lowercase',
   },
 });

@@ -12,15 +12,12 @@ import {
   queuePosition,
 } from '../state/selectors';
 import { findSpace, SPACES } from '../constants/spaces';
-import { USERS, findUser } from '../constants/users';
 import {
-  ADMIN_PASSCODE,
   BREAK_MINUTES,
   RESERVATION_SECONDS,
   SESSION_SECONDS,
 } from '../constants/policy';
 import { theme } from '../constants/theme';
-import { newId, makeBreakEnd } from '../logic/sessions';
 import { computeExpiryActions } from '../logic/expiry';
 import { goToTab, goToHome } from './navRef';
 import { formatTime, secondsUntil } from '../utils/time';
@@ -40,21 +37,20 @@ import { TabBar } from './TabBar';
 import { ConfirmDialog, ConfirmConfig } from '../components/ConfirmDialog';
 import { AccountMenu } from '../components/AccountMenu';
 import { PickerSheet } from '../components/PickerSheet';
-import { PasscodeDialog } from '../components/PasscodeDialog';
 import { useToast } from '../components/Toast';
-import { User } from '../types';
+import { Profile } from '../types';
+import { supabase } from '../lib/supabase';
 
 const Tab = createBottomTabNavigator();
 const HomeStack = createNativeStackNavigator();
 
 export function RootNavigator() {
-  const { state, dispatch } = useStore();
+  const store = useStore();
+  const { state } = store;
   const toast = useToast();
 
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const [hostelPickerOpen, setHostelPickerOpen] = useState(false);
-  const [userSwitcherOpen, setUserSwitcherOpen] = useState(false);
-  const [passcodeOpen, setPasscodeOpen] = useState(false);
 
   const [confirmCfg, setConfirmCfg] = useState<ConfirmConfig | null>(null);
   const [confirmResolve, setConfirmResolve] = useState<((v: boolean) => void) | null>(null);
@@ -78,132 +74,112 @@ export function RootNavigator() {
     setConfirmResolve(null);
   }, [confirmResolve]);
 
-  const user = findUser(state.currentUserId)!;
+  const profile = state.profile!;
   const hasSession = !!myActiveSession(state);
   const myRes = myReservation(state);
   const waitCount = myWaitlist(state).length;
   const admin = isAdmin(state);
 
-  // Expiry tick
+  // Expiry tick — client-side. Handles break expiry + reservation expiry UI-side.
+  // Server truth comes from realtime; this is for local countdown triggers.
   useEffect(() => {
     const t = setInterval(() => {
-      const actions = computeExpiryActions(state);
-      actions.forEach(a => {
-        dispatch(a);
-        if (a.type === 'RESERVATION_EXPIRED') {
-          const r = state.reservations.find(x => x.id === a.payload.reservationId);
-          if (r?.user_id === state.currentUserId) {
-            const table = state.tables.find(t => t.id === r.table_id);
-            toast.show(`Reservation expired · ${table?.label} released`, 'warning');
-          }
-        }
-        if (a.type === 'FINALIZE' && a.payload.reason === 'expired') {
-          const s = state.sessions.find(x => x.id === a.payload.sessionId);
-          if (s?.user_id === state.currentUserId) {
-            toast.show('60 minutes up · Session ended', 'warning');
-          }
+      // Clear expired reservations client-side (server already does too)
+      const now = Date.now();
+      state.reservations.forEach(r => {
+        if (now > new Date(r.expires_at).getTime()) {
+          store.cancelReservation(r.id).catch(() => {});
         }
       });
     }, 1000);
     return () => clearInterval(t);
-  }, [state, dispatch, toast]);
+  }, [state.reservations, store]);
 
-  // ─── Shared actions ───
-
-  const notifyNextInWaitlist = useCallback(
-    (tableId: string, snapshot = state) => {
-      const next = snapshot.waitlist
-        .filter(w => w.table_id === tableId && !w.notified && w.status === 'waiting')
-        .sort((a, b) => a.created_at.localeCompare(b.created_at))[0];
-      if (next) {
-        dispatch({
-          type: 'NOTIFY_NEXT',
-          payload: { tableId, entryId: next.id, at: new Date().toISOString() },
-        });
-        if (next.user_id === state.currentUserId) {
-          toast.show('Table now available', 'success');
-        }
-      }
-    },
-    [state, dispatch, toast]
-  );
+  // ─── Action wrappers (with toast) ───
 
   const startSession = useCallback(
-    (tableId: string) => {
+    async (tableId: string) => {
       const table = state.tables.find(t => t.id === tableId);
       if (!table) return;
-      const sessionId = newId('session');
       const endsAt = new Date(Date.now() + SESSION_SECONDS * 1000).toISOString();
-      dispatch({
-        type: 'CHECK_IN',
-        payload: { tableId, userId: state.currentUserId, sessionId, endsAt },
-      });
-      toast.show(`Checked in · ${table.label}`, 'success');
-      goToTab('Session');
+      try {
+        await store.checkInDirect(tableId, endsAt);
+        toast.show(`Checked in · ${table.label}`, 'success');
+        goToTab('Session');
+      } catch (e: any) {
+        toast.show(e?.message ?? 'Check-in failed', 'error');
+      }
     },
-    [state, dispatch, toast]
+    [state.tables, store, toast]
   );
 
   const scanToStart = useCallback(
-    (reservationId: string) => {
+    async (reservationId: string) => {
       const res = state.reservations.find(r => r.id === reservationId);
       if (!res) return;
       const table = state.tables.find(t => t.id === res.table_id);
-      const sessionId = newId('session');
       const endsAt = new Date(Date.now() + SESSION_SECONDS * 1000).toISOString();
-      dispatch({
-        type: 'SCAN_TO_START',
-        payload: { reservationId, sessionId, endsAt },
-      });
-      toast.show(`Checked in · ${table?.label}`, 'success');
-      goToTab('Session');
+      try {
+        await store.scanToStart(reservationId, endsAt);
+        toast.show(`Checked in · ${table?.label}`, 'success');
+        goToTab('Session');
+      } catch (e: any) {
+        toast.show(e?.message ?? 'Check-in failed', 'error');
+      }
     },
-    [state, dispatch, toast]
+    [state.reservations, state.tables, store, toast]
   );
 
   const reserve = useCallback(
-    (tableId: string) => {
+    async (tableId: string) => {
       const table = state.tables.find(t => t.id === tableId);
       if (!table) return;
-      const now = Date.now();
-      dispatch({
-        type: 'RESERVE',
-        payload: {
-          reservationId: newId('res'),
-          tableId,
-          spaceId: table.space_id,
-          userId: state.currentUserId,
-          createdAt: new Date(now).toISOString(),
-          expiresAt: new Date(now + RESERVATION_SECONDS * 1000).toISOString(),
-        },
-      });
-      toast.show(`Reserved · ${table.label} — scan to start`, 'info');
-      goToTab('Scan');
+      const expiresAt = new Date(Date.now() + RESERVATION_SECONDS * 1000).toISOString();
+      try {
+        await store.reserve(tableId, expiresAt);
+        toast.show(`Reserved · ${table.label} — scan to start`, 'info');
+        goToTab('Scan');
+      } catch (e: any) {
+        toast.show(e?.message ?? 'Reserve failed', 'error');
+      }
     },
-    [state, dispatch, toast]
+    [state.tables, store, toast]
   );
 
   const cancelReservation = useCallback(
-    (reservationId: string) => {
-      dispatch({ type: 'CANCEL_RESERVATION', payload: { reservationId } });
-      toast.show('Reservation cancelled', 'info');
+    async (reservationId: string) => {
+      try {
+        await store.cancelReservation(reservationId);
+        toast.show('Reservation cancelled', 'info');
+      } catch (e: any) {
+        toast.show(e?.message ?? 'Cancel failed', 'error');
+      }
     },
-    [dispatch, toast]
+    [store, toast]
   );
 
-  const startBreak = useCallback(() => {
+  const startBreak = useCallback(async () => {
     const s = myActiveSession(state);
     if (!s) return;
-    dispatch({ type: 'START_BREAK', payload: { sessionId: s.id, breakEndsAt: makeBreakEnd() } });
-    toast.show(`Break started · ${BREAK_MINUTES} min`, 'warning');
-  }, [state, dispatch, toast]);
+    const breakEndsAt = new Date(Date.now() + BREAK_MINUTES * 60 * 1000).toISOString();
+    try {
+      await store.startBreak(s.id, breakEndsAt);
+      toast.show(`Break started · ${BREAK_MINUTES} min`, 'warning');
+    } catch (e: any) {
+      toast.show(e?.message ?? 'Break failed', 'error');
+    }
+  }, [state, store, toast]);
 
-  const endBreak = useCallback(() => {
+  const endBreak = useCallback(async () => {
     const s = myActiveSession(state);
     if (!s) return;
-    dispatch({ type: 'END_BREAK', payload: { sessionId: s.id } });
-    toast.show('Session resumed', 'success');
-  }, [state, dispatch, toast]);
+    try {
+      await store.endBreak(s.id);
+      toast.show('Session resumed', 'success');
+    } catch (e: any) {
+      toast.show(e?.message ?? 'Resume failed', 'error');
+    }
+  }, [state, store, toast]);
 
   const endSession = useCallback(async () => {
     const s = myActiveSession(state);
@@ -216,75 +192,71 @@ export function RootNavigator() {
       destructive: true,
     });
     if (!ok) return;
-    dispatch({ type: 'FINALIZE', payload: { sessionId: s.id, reason: 'completed' } });
-    notifyNextInWaitlist(s.table_id);
-    toast.show('Session ended · Table released', 'info');
-  }, [state, dispatch, confirm, notifyNextInWaitlist, toast]);
+    try {
+      await store.endSession(s.id, 'completed');
+      toast.show('Session ended · Table released', 'info');
+    } catch (e: any) {
+      toast.show(e?.message ?? 'End failed', 'error');
+    }
+  }, [state, confirm, store, toast]);
 
   const joinWaitlist = useCallback(
-    (tableId: string) => {
+    async (tableId: string) => {
       const table = state.tables.find(t => t.id === tableId);
       if (!table) return;
-      dispatch({
-        type: 'JOIN_WAITLIST',
-        payload: {
-          entryId: newId('wait'),
-          tableId,
-          spaceId: table.space_id,
-          userId: state.currentUserId,
-          createdAt: new Date().toISOString(),
-        },
-      });
-      toast.show(`Added to queue · ${table.label}`, 'success');
+      try {
+        await store.joinWaitlist(tableId, table.space_id);
+        toast.show(`Added to queue · ${table.label}`, 'success');
+      } catch (e: any) {
+        toast.show(e?.message ?? 'Queue failed', 'error');
+      }
     },
-    [state, dispatch, toast]
+    [state.tables, store, toast]
   );
 
   const leaveWaitlist = useCallback(
-    (entryId: string) => {
-      dispatch({ type: 'LEAVE_WAITLIST', payload: { entryId } });
-      toast.show('Left waitlist', 'info');
+    async (entryId: string) => {
+      try {
+        await store.leaveWaitlist(entryId);
+        toast.show('Left waitlist', 'info');
+      } catch (e: any) {
+        toast.show(e?.message ?? 'Leave failed', 'error');
+      }
     },
-    [dispatch, toast]
+    [store, toast]
   );
 
-  // ─── Table tap (Map) ───
+  // ─── Table tap ───
   const handleTablePress = useCallback(
     async (tableId: string) => {
       const table = state.tables.find(t => t.id === tableId);
       if (!table) return;
 
       const mine = myActiveSession(state);
-      const myRes = myReservation(state);
+      const myR = myReservation(state);
 
-      if (mine && mine.table_id === tableId) {
-        goToTab('Session');
-        return;
-      }
+      if (mine && mine.table_id === tableId) { goToTab('Session'); return; }
       if (mine) {
         toast.show('You already have an active session', 'error');
         goToTab('Session');
         return;
       }
 
-      if (myRes && myRes.table_id === tableId) {
-        const remaining = secondsUntil(myRes.expires_at);
+      if (myR && myR.table_id === tableId) {
+        const remaining = secondsUntil(myR.expires_at);
         const choice = await confirm({
           title: 'Check In Required',
           message: `You reserved Table ${table.label}. Scan the QR on the table to start your session.\n\nTime remaining: ${formatTime(remaining)}`,
           confirmText: 'Scan QR',
           cancelText: 'Cancel Reservation',
         });
-        if (choice) {
-          goToTab('Scan');
-        } else {
-          cancelReservation(myRes.id);
-        }
+        if (choice) goToTab('Scan');
+        else await cancelReservation(myR.id);
         return;
       }
 
-      if (myRes && myRes.table_id !== tableId) {
-        const otherTable = state.tables.find(t => t.id === myRes.table_id);
+      if (myR && myR.table_id !== tableId) {
+        const otherTable = state.tables.find(t => t.id === myR.table_id);
         const ok = await confirm({
           title: 'Cancel Reservation?',
           message: `You have Table ${otherTable?.label} reserved. Cancel it and continue with ${table.label}?`,
@@ -292,7 +264,7 @@ export function RootNavigator() {
           cancelText: 'Keep',
         });
         if (!ok) return;
-        dispatch({ type: 'CANCEL_RESERVATION', payload: { reservationId: myRes.id } });
+        await cancelReservation(myR.id);
       }
 
       if (table.status === 'available') {
@@ -303,7 +275,7 @@ export function RootNavigator() {
           confirmText: 'Reserve',
           cancelText: 'Cancel',
         });
-        if (ok) reserve(tableId);
+        if (ok) await reserve(tableId);
         return;
       }
 
@@ -318,9 +290,8 @@ export function RootNavigator() {
       }
 
       const existing = state.waitlist.find(
-        w => w.table_id === tableId && w.user_id === state.currentUserId && w.status === 'waiting'
+        w => w.table_id === tableId && w.user_id === profile.id && w.status === 'waiting'
       );
-
       if (existing) {
         const pos = queuePosition(state, existing.id);
         const ok = await confirm({
@@ -345,9 +316,9 @@ export function RootNavigator() {
         confirmText: 'Join',
         cancelText: 'Cancel',
       });
-      if (ok) joinWaitlist(tableId);
+      if (ok) await joinWaitlist(tableId);
     },
-    [state, confirm, reserve, cancelReservation, joinWaitlist, toast]
+    [state, profile.id, confirm, reserve, cancelReservation, joinWaitlist, toast]
   );
 
   // ─── Scan handler ───
@@ -360,16 +331,13 @@ export function RootNavigator() {
       }
 
       const mine = myActiveSession(state);
-      const myRes = myReservation(state);
+      const myR = myReservation(state);
       const otherRes = state.reservations.find(
-        r => r.table_id === table.id && r.user_id !== state.currentUserId
+        r => r.table_id === table.id && r.user_id !== profile.id
       );
 
       if (mine) {
-        if (mine.table_id === table.id) {
-          goToTab('Session');
-          return true;
-        }
+        if (mine.table_id === table.id) { goToTab('Session'); return true; }
         toast.show('You already have an active session', 'error');
         goToTab('Session');
         return true;
@@ -380,13 +348,13 @@ export function RootNavigator() {
         return false;
       }
 
-      if (myRes && myRes.table_id === table.id) {
-        scanToStart(myRes.id);
+      if (myR && myR.table_id === table.id) {
+        scanToStart(myR.id);
         return true;
       }
 
-      if (myRes && myRes.table_id !== table.id) {
-        const otherTable = state.tables.find(t => t.id === myRes.table_id);
+      if (myR && myR.table_id !== table.id) {
+        const otherTable = state.tables.find(t => t.id === myR.table_id);
         toast.show(`You have ${otherTable?.label} reserved. Cancel it first.`, 'error');
         return false;
       }
@@ -408,7 +376,7 @@ export function RootNavigator() {
 
       return false;
     },
-    [state, toast, scanToStart, startSession, handleTablePress]
+    [state, profile.id, toast, scanToStart, startSession, handleTablePress]
   );
 
   // ─── UI handlers ───
@@ -416,50 +384,41 @@ export function RootNavigator() {
   const handleUserPress = useCallback(() => setAccountMenuOpen(true), []);
 
   const handlePickHostel = useCallback(
-    (spaceId: string) => {
-      dispatch({ type: 'SET_HOSTEL', payload: { userId: state.currentUserId, spaceId } });
+    async (spaceId: string) => {
       setHostelPickerOpen(false);
-      toast.show(`Home set · ${findSpace(spaceId)?.name}`, 'success');
-    },
-    [dispatch, state.currentUserId, toast]
-  );
-
-  const handleSwitchUser = useCallback(
-    (userId: string) => {
-      dispatch({ type: 'SET_USER', payload: userId });
-      setUserSwitcherOpen(false);
-      toast.show(`Switched to ${userId}`, 'info');
-    },
-    [dispatch, toast]
-  );
-
-  const handleUnlockAdmin = useCallback(() => setPasscodeOpen(true), []);
-
-  const handlePasscodeSubmit = useCallback(
-    (code: string) => {
-      setPasscodeOpen(false);
-      if (code === ADMIN_PASSCODE) {
-        dispatch({ type: 'SET_USER', payload: 'ADM-001' });
-        toast.show('Admin unlocked', 'success');
-      } else {
-        toast.show('Incorrect passcode', 'error');
+      try {
+        await store.setHostel(spaceId);
+        toast.show(`Home set · ${findSpace(spaceId)?.name}`, 'success');
+      } catch (e: any) {
+        toast.show(e?.message ?? 'Update failed', 'error');
       }
     },
-    [dispatch, toast]
+    [store, toast]
   );
+
+  const handleSignOut = useCallback(async () => {
+    setAccountMenuOpen(false);
+    await store.signOut();
+  }, [store]);
 
   const handleReset = useCallback(async () => {
     const ok = await confirm({
-      title: 'Reset Demo Data',
-      message: 'Wipe all sessions, reservations, tables, and waitlists?',
+      title: 'Reset All Tables',
+      message: 'Set every table back to available? This also clears all sessions, reservations, and waitlists.',
       confirmText: 'Reset',
       cancelText: 'Cancel',
       destructive: true,
     });
     if (!ok) return;
-    dispatch({ type: 'RESET', payload: seedFreshState() });
-    toast.show('Reset complete', 'info');
-  }, [confirm, dispatch, toast]);
+    try {
+      const { error } = await supabase.rpc('reset_all_tables');
+      if (error) throw error;
+      await store.refreshAll();
+      toast.show('All tables reset', 'info');
+    } catch (e: any) {
+      toast.show(e?.message ?? 'Reset failed', 'error');
+    }
+  }, [confirm, store, toast]);
 
   // Header values
   const sessionVariant: 'default' | 'away' | 'grace' = (() => {
@@ -482,20 +441,20 @@ export function RootNavigator() {
     return `${space?.name} · ${table?.label}`;
   })();
 
-  // ─── Home nested stack (Home / Browse / Map) ───
+  // ─── Home nested stack ───
   const HomeStackNavigator = () => (
-    <HomeStack.Navigator screenOptions={{ headerShown: false }}>
+    <HomeStack.Navigator screenOptions={{ headerShown: false, animation: 'fade' }}>
       <HomeStack.Screen name="HomeMain">
         {({ navigation }) => (
           <>
             <AppHeader
               title={admin ? 'Admin' : 'Home'}
               subtitle={admin ? 'Occupancy & utilization' : 'Library & your hostel'}
-              user={user}
+              profile={profile}
               onUserPress={handleUserPress}
             />
             {admin ? (
-              <AdminScreen onUnlock={handleUnlockAdmin} onReset={handleReset} />
+              <AdminScreen onReset={handleReset} />
             ) : (
               <HomeScreen
                 onOpenSpace={id => navigation.navigate('Map', { spaceId: id })}
@@ -512,7 +471,7 @@ export function RootNavigator() {
             <AppHeader
               title="All Spaces"
               subtitle="Library & 13 hostels"
-              user={user}
+              profile={profile}
               onUserPress={handleUserPress}
             />
             <BrowseScreen
@@ -522,10 +481,7 @@ export function RootNavigator() {
         )}
       </HomeStack.Screen>
 
-      <HomeStack.Screen
-        name="Map"
-        options={{ animation: 'fade' }} // fade, slide_from_right, slide_from_bottom, flip, none, default
-      >
+      <HomeStack.Screen name="Map">
         {({ route }: any) => {
           const spaceId = route.params?.spaceId as string;
           const space = findSpace(spaceId);
@@ -534,7 +490,7 @@ export function RootNavigator() {
               <AppHeader
                 title={space?.name ?? 'Map'}
                 subtitle={space?.type === 'library' ? 'Library' : 'Hostel'}
-                user={user}
+                profile={profile}
                 onUserPress={handleUserPress}
               />
               <MapScreen spaceId={spaceId} onTablePress={handleTablePress} />
@@ -575,7 +531,7 @@ export function RootNavigator() {
                 title={sessionTitle}
                 subtitle={sessionSubtitle}
                 titleVariant={sessionVariant}
-                user={user}
+                profile={profile}
                 onUserPress={handleUserPress}
               />
               <SessionScreen
@@ -594,7 +550,7 @@ export function RootNavigator() {
               <AppHeader
                 title="Waitlist"
                 subtitle="Your queued tables"
-                user={user}
+                profile={profile}
                 onUserPress={handleUserPress}
               />
               <WaitlistScreen onLeave={leaveWaitlist} />
@@ -605,7 +561,7 @@ export function RootNavigator() {
         <Tab.Screen name="Scan">
           {() => (
             <ScanTabContent
-              user={user}
+              profile={profile}
               onUserPress={handleUserPress}
               onScan={handleScan}
               onExit={() => goToHome()}
@@ -614,11 +570,10 @@ export function RootNavigator() {
         </Tab.Screen>
       </Tab.Navigator>
 
-      {/* Global overlays */}
       <AccountMenu
         visible={accountMenuOpen}
         title="Account"
-        subtitle={`${state.currentUserId} · ${user.name}`}
+        subtitle={`@${profile.username} · ${profile.display_name}`}
         items={[
           {
             label: 'Change hostel',
@@ -628,25 +583,9 @@ export function RootNavigator() {
               setTimeout(() => setHostelPickerOpen(true), 200);
             },
           },
-          ...(!admin
-            ? [
-                {
-                  label: 'Unlock Admin',
-                  hint: 'passcode',
-                  onSelect: () => {
-                    setAccountMenuOpen(false);
-                    setTimeout(() => setPasscodeOpen(true), 200);
-                  },
-                },
-              ]
-            : []),
           {
-            label: 'Switch user',
-            hint: 'demo',
-            onSelect: () => {
-              setAccountMenuOpen(false);
-              setTimeout(() => setUserSwitcherOpen(true), 200);
-            },
+            label: 'Sign out',
+            onSelect: handleSignOut,
           },
           {
             label: 'Close',
@@ -669,27 +608,6 @@ export function RootNavigator() {
         onCancel={() => setHostelPickerOpen(false)}
       />
 
-      <PickerSheet
-        visible={userSwitcherOpen}
-        title="Switch User"
-        message="Demo only — pick a user to act as."
-        items={USERS.map(u => ({
-          id: u.id,
-          label: `${u.id} · ${u.name}`,
-          sublabel: u.role,
-          isActive: u.id === state.currentUserId,
-          isAdmin: u.role === 'admin',
-        }))}
-        onSelect={handleSwitchUser}
-        onCancel={() => setUserSwitcherOpen(false)}
-      />
-
-      <PasscodeDialog
-        visible={passcodeOpen}
-        onSubmit={handlePasscodeSubmit}
-        onCancel={() => setPasscodeOpen(false)}
-      />
-
       <ConfirmDialog
         visible={!!confirmCfg}
         title={confirmCfg?.title ?? ''}
@@ -705,17 +623,13 @@ export function RootNavigator() {
   );
 }
 
-/**
- * Scan tab content — separated so it can tick every second and keep
- * the reservation countdown live.
- */
 function ScanTabContent({
-  user,
+  profile,
   onUserPress,
   onScan,
   onExit,
 }: {
-  user: User;
+  profile: Profile;
   onUserPress: () => void;
   onScan: (data: string) => boolean;
   onExit: () => void;
@@ -739,7 +653,7 @@ function ScanTabContent({
       <AppHeader
         title="Scan"
         subtitle="Point at a table QR"
-        user={user}
+        profile={profile}
         onUserPress={onUserPress}
       />
       <ScanScreen
@@ -749,29 +663,4 @@ function ScanTabContent({
       />
     </>
   );
-}
-
-function seedFreshState() {
-  const tables = SPACES.flatMap(space => {
-    const prefix = space.type === 'library' ? 'L' : space.id.slice(0, 2).toUpperCase();
-    return Array.from({ length: space.tables }, (_, i) => {
-      const label = `${prefix}-${String(i + 1).padStart(2, '0')}`;
-      return {
-        id: `table-${space.id}-${i + 1}`,
-        space_id: space.id,
-        label,
-        qr_code: `TABL-${space.id.toUpperCase()}-${label}`,
-        status: 'available' as const,
-        current_session_id: null,
-      };
-    });
-  });
-  return {
-    tables,
-    sessions: [],
-    reservations: [],
-    waitlist: [],
-    hostelsByUser: {},
-    currentUserId: 'STU-001',
-  };
 }

@@ -1,31 +1,17 @@
 import React from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useStore } from '../state/store';
-import { isAdmin, tablesInSpace } from '../state/selectors';
+import { tablesInSpace } from '../state/selectors';
 import { SPACES } from '../constants/spaces';
 import { theme } from '../constants/theme';
 import { Button } from '../components/Button';
 
 interface Props {
-  onUnlock: () => void;
   onReset: () => void;
 }
 
-export function AdminScreen({ onUnlock, onReset }: Props) {
+export function AdminScreen({ onReset }: Props) {
   const { state } = useStore();
-
-  if (!isAdmin(state)) {
-    return (
-      <View style={styles.empty}>
-        <Text style={styles.emptyIcon}>◎</Text>
-        <Text style={styles.emptyText}>Admin access required</Text>
-        <Text style={styles.emptySub}>Sign in as an admin</Text>
-        <View style={{ width: '100%', marginTop: 24, paddingHorizontal: 40 }}>
-          <Button label="Unlock Admin" variant="primary" onPress={onUnlock} />
-        </View>
-      </View>
-    );
-  }
 
   const total = state.tables.length;
   const available = state.tables.filter(t => t.status === 'available').length;
@@ -104,7 +90,7 @@ export function AdminScreen({ onUnlock, onReset }: Props) {
       </View>
 
       <Button
-        label="Reset Demo Data"
+        label="Reset All Tables"
         variant="ghost"
         onPress={onReset}
         style={{ marginTop: 24 }}
@@ -181,7 +167,7 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
   },
   statValue: {
-    fontFamily: theme.fonts.dot,
+    fontFamily: theme.fonts.display,
     fontSize: 32,
     color: theme.colors.text,
     marginTop: 8,
@@ -214,19 +200,4 @@ const styles = StyleSheet.create({
     color: theme.colors.text,
   },
   valueSmall: { fontFamily: theme.fonts.monoBold, fontSize: 11 },
-  empty: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 40 },
-  emptyIcon: { fontSize: 32, color: theme.colors.textDim, marginBottom: 20 },
-  emptyText: {
-    fontFamily: theme.fonts.mono,
-    fontSize: 10,
-    color: theme.colors.textDim,
-    letterSpacing: 1.5,
-  },
-  emptySub: {
-    fontFamily: theme.fonts.mono,
-    fontSize: 10,
-    color: theme.colors.textDim,
-    letterSpacing: 1.5,
-    marginTop: 6,
-  },
 });
