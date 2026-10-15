@@ -8,7 +8,6 @@ interface Props {
   table: Table;
   isMine?: boolean;
   breakRemainingSec?: number | null;
-  graceRemainingSec?: number | null;
   reserveRemainingSec?: number | null;
   onPress: () => void;
 }
@@ -17,7 +16,6 @@ export function TableCard({
   table,
   isMine,
   breakRemainingSec,
-  graceRemainingSec,
   reserveRemainingSec,
   onPress,
 }: Props) {
@@ -33,7 +31,6 @@ export function TableCard({
     : table.status === 'occupied' ? 'Occupied'
     : 'Away';
 
-  // Neutral border, except when it's yours.
   const borderColor =
     isMine && table.status === 'reserved' ? theme.colors.blue
     : isMine ? theme.colors.green
@@ -76,11 +73,6 @@ export function TableCard({
       )}
       {breakRemainingSec != null && (
         <Text style={styles.extra}>◷ {formatTime(breakRemainingSec)}</Text>
-      )}
-      {graceRemainingSec != null && (
-        <Text style={[styles.extra, { color: theme.colors.red }]}>
-          GRACE {formatTime(graceRemainingSec)}
-        </Text>
       )}
     </Pressable>
   );

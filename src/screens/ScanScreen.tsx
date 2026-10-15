@@ -1,5 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  Animated,
+  Easing,
   Linking,
   Pressable,
   StyleSheet,
@@ -7,6 +9,7 @@ import {
   useWindowDimensions,
   View,
 } from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
@@ -20,19 +23,43 @@ interface Props {
 }
 
 const FRAME = 240;
-const MASK_COLOR = '#000000';
 
 export function ScanScreen({ onScan, onExit, reservationLabel }: Props) {
   const insets = useSafeAreaInsets();
   const { width: screenW, height: screenH } = useWindowDimensions();
   const [permission, requestPermission] = useCameraPermissions();
   const qrLock = useRef(false);
+  const lockTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [focused, setFocused] = useState(false);
 
   useEffect(() => {
     if (permission && !permission.granted && permission.canAskAgain) {
       requestPermission();
     }
   }, [permission, requestPermission]);
+
+  // Tab screens never unmount, so we track focus ourselves. This resets the
+  // scan lock on focus, and (important on Android) lets us unmount the camera
+  // while the tab is hidden instead of leaving it running in the background.
+  useFocusEffect(
+    useCallback(() => {
+      qrLock.current = false;
+      setFocused(true);
+      return () => {
+        if (lockTimer.current) clearTimeout(lockTimer.current);
+        lockTimer.current = null;
+        qrLock.current = false;
+        setFocused(false);
+      };
+    }, [])
+  );
+
+  // Clear any pending lock timer on real unmount.
+  useEffect(() => {
+    return () => {
+      if (lockTimer.current) clearTimeout(lockTimer.current);
+    };
+  }, []);
 
   const handleScanned = useCallback(
     ({ data }: { data: string }) => {
@@ -41,13 +68,19 @@ export function ScanScreen({ onScan, onExit, reservationLabel }: Props) {
 
       const handled = onScan(data);
 
-      if (handled) {
-        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
-      } else {
-        setTimeout(() => {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+
+      // Release the lock on a timer. Successful scans release faster
+      // (navigation is quick); rejected scans leave a longer pause so the
+      // user can see the toast and reposition the QR.
+      if (lockTimer.current) clearTimeout(lockTimer.current);
+      lockTimer.current = setTimeout(
+        () => {
           qrLock.current = false;
-        }, 1500);
-      }
+          lockTimer.current = null;
+        },
+        handled ? 1500 : 2000
+      );
     },
     [onScan]
   );
@@ -87,12 +120,18 @@ export function ScanScreen({ onScan, onExit, reservationLabel }: Props) {
 
   return (
     <View style={styles.root}>
-      <CameraView
-        style={StyleSheet.absoluteFill}
-        facing="back"
-        barcodeScannerSettings={{ barcodeTypes: ['qr'] }}
-        onBarcodeScanned={handleScanned}
-      />
+      {focused && (
+        <CameraView
+          // Key on whether a reservation exists, NOT the label. The label is a
+          // live countdown, so keying on it remounted the camera every tick,
+          // which caused flicker and dropped scans on Android.
+          key={reservationLabel ? 'reservation' : 'no-reservation'}
+          style={StyleSheet.absoluteFill}
+          facing="back"
+          barcodeScannerSettings={{ barcodeTypes: ['qr'] }}
+          onBarcodeScanned={handleScanned}
+        />
+      )}
 
       {/* Top mask */}
       <View
@@ -141,7 +180,7 @@ export function ScanScreen({ onScan, onExit, reservationLabel }: Props) {
         <View style={[styles.corner, styles.tr]} />
         <View style={[styles.corner, styles.bl]} />
         <View style={[styles.corner, styles.br]} />
-        <ScanLine />
+        {focused && <ScanLine />}
       </View>
 
       {/* Top bar */}
@@ -170,29 +209,40 @@ export function ScanScreen({ onScan, onExit, reservationLabel }: Props) {
   );
 }
 
+// Runs on the native thread via Animated, so it stays smooth even when the JS
+// thread is busy handling camera callbacks. The old version re-rendered the
+// whole component 60x/sec with setState and recreated its interval every
+// time the direction flipped.
 function ScanLine() {
-  const [y, setY] = useState(0);
-  const [dir, setDir] = useState<1 | -1>(1);
+  const translateY = useRef(new Animated.Value(4)).current;
 
   useEffect(() => {
-    const STEP = 2;
-    const t = setInterval(() => {
-      setY(prev => {
-        let next = prev + dir * STEP;
-        if (next >= FRAME - 4) {
-          setDir(-1);
-          next = FRAME - 4;
-        } else if (next <= 4) {
-          setDir(1);
-          next = 4;
-        }
-        return next;
-      });
-    }, 16);
-    return () => clearInterval(t);
-  }, [dir]);
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(translateY, {
+          toValue: FRAME - 6,
+          duration: 1900,
+          easing: Easing.linear,
+          useNativeDriver: true,
+        }),
+        Animated.timing(translateY, {
+          toValue: 4,
+          duration: 1900,
+          easing: Easing.linear,
+          useNativeDriver: true,
+        }),
+      ])
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [translateY]);
 
-  return <View style={[styles.scanLine, { top: y }]} pointerEvents="none" />;
+  return (
+    <Animated.View
+      pointerEvents="none"
+      style={[styles.scanLine, { transform: [{ translateY }] }]}
+    />
+  );
 }
 
 const styles = StyleSheet.create({
@@ -220,6 +270,7 @@ const styles = StyleSheet.create({
   },
   scanLine: {
     position: 'absolute',
+    top: 0,
     left: 8, right: 8, height: 2,
     backgroundColor: theme.colors.green,
     opacity: 0.85,
@@ -241,7 +292,7 @@ const styles = StyleSheet.create({
     letterSpacing: 2,
   },
   title: {
-    fontFamily: theme.fonts.dot,
+    fontFamily: theme.fonts.display,
     fontSize: 16,
     color: theme.colors.text,
     letterSpacing: 1.5,

@@ -3,7 +3,6 @@ export type TableStatus = 'available' | 'reserved' | 'occupied' | 'on_break';
 export type SessionStatus =
   | 'active'
   | 'on_break'
-  | 'on_break_expired'
   | 'completed'
   | 'expired';
 export type UserRole = 'student' | 'admin';
@@ -43,7 +42,9 @@ export interface Session {
   ended_at: string | null;
   break_ends_at: string | null;
   break_duration: number | null;
-  grace_ends_at: string | null;
+  paused_at: string | null;
+  break_started_at: string | null;
+  break_seconds_used: number;
 }
 
 export interface Reservation {
@@ -71,6 +72,6 @@ export interface AppState {
   sessions: Session[];
   reservations: Reservation[];
   waitlist: WaitlistEntry[];
-  profiles: Profile[];         // ← new: all users, for owner name lookup
-  profile: Profile | null;     // current logged-in user
+  profiles: Profile[];
+  profile: Profile | null;
 }

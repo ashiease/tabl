@@ -7,15 +7,21 @@ import { Button } from '../components/Button';
 import { theme } from '../constants/theme';
 import { sessionSecondsLeft } from '../logic/sessions';
 import { formatTime, formatClock, secondsUntil } from '../utils/time';
-import { SESSION_SECONDS, LOW_TIME_THRESHOLD, GRACE_SECONDS } from '../constants/policy';
+import { SESSION_SECONDS, LOW_TIME_THRESHOLD } from '../constants/policy';
 
 interface Props {
   onStartBreak: () => void;
   onEndBreak: () => void;
   onEndSession: () => void;
+  breakBudgetRemaining: number | null;
 }
 
-export function SessionScreen({ onStartBreak, onEndBreak, onEndSession }: Props) {
+export function SessionScreen({
+  onStartBreak,
+  onEndBreak,
+  onEndSession,
+  breakBudgetRemaining,
+}: Props) {
   const { state } = useStore();
   const session = myActiveSession(state);
   const [, force] = useState(0);
@@ -39,31 +45,20 @@ export function SessionScreen({ onStartBreak, onEndBreak, onEndSession }: Props)
   const endsAt = new Date(session.ends_at).getTime();
 
   let remainingFraction = 0;
-  let mode: 'session' | 'break' | 'grace' = 'session';
+  let mode: 'session' | 'break' = 'session';
   let low = false;
-  let urgent = false;
   let centerBig = '';
   let centerSmall = 'Remaining';
 
-  if (session.status === 'on_break' && session.break_ends_at) {
+  if (session.status === 'on_break' && session.break_ends_at && session.paused_at) {
     mode = 'break';
     const breakEnds = new Date(session.break_ends_at).getTime();
-    const totalMs = (session.break_duration ?? 15) * 60 * 1000;
+    const breakStarted = new Date(session.paused_at).getTime();
+    const totalMs = Math.max(1, breakEnds - breakStarted);
     const remainingMs = Math.max(0, breakEnds - Date.now());
     remainingFraction = Math.min(1, remainingMs / totalMs);
-    urgent = remainingMs < 60_000;
     centerBig = formatTime(secondsUntil(session.break_ends_at));
     centerSmall = 'Break Remaining';
-  } else if (session.status === 'on_break_expired' && session.grace_ends_at) {
-    mode = 'grace';
-    const graceEnds = new Date(session.grace_ends_at).getTime();
-    remainingFraction = Math.min(
-      1,
-      Math.max(0, (graceEnds - Date.now()) / (GRACE_SECONDS * 1000))
-    );
-    urgent = true;
-    centerBig = formatTime(secondsUntil(session.grace_ends_at));
-    centerSmall = 'Grace Remaining';
   } else {
     const left = sessionSecondsLeft(session);
     remainingFraction = Math.min(1, left / SESSION_SECONDS);
@@ -71,7 +66,18 @@ export function SessionScreen({ onStartBreak, onEndBreak, onEndSession }: Props)
     centerBig = formatTime(left);
   }
 
-  const bigColor = mode === 'grace' ? theme.colors.red : theme.colors.text;
+  const hasBreakBudget =
+    breakBudgetRemaining !== null && breakBudgetRemaining > 0;
+
+  const breakMinutesLabel =
+    breakBudgetRemaining !== null
+      ? Math.ceil(breakBudgetRemaining / 60)
+      : 15;
+
+  const breakHint =
+    breakBudgetRemaining !== null
+      ? `${formatTime(breakBudgetRemaining)} LEFT`
+      : '+ 15M PAUSE';
 
   return (
     <ScrollView contentContainerStyle={styles.container}>
@@ -88,36 +94,38 @@ export function SessionScreen({ onStartBreak, onEndBreak, onEndSession }: Props)
       </View>
 
       <View style={styles.ringWrap}>
-        <DotRing
-          remainingFraction={remainingFraction}
-          mode={mode}
-          low={low}
-          urgent={urgent}
-        >
-          <Text style={[styles.big, { color: bigColor }]}>{centerBig}</Text>
+        <DotRing remainingFraction={remainingFraction} mode={mode} low={low}>
+          <Text style={styles.big}>{centerBig}</Text>
           <Text style={styles.small}>{centerSmall.toUpperCase()}</Text>
         </DotRing>
       </View>
 
       <View style={styles.actions}>
-        {mode === 'session' && (
+        {mode === 'session' && hasBreakBudget && (
           <Button
-          label="15 MIN BREAK"
-          rightHint="+ 5M GRACE"
-          variant="warning"
-          onPress={onStartBreak}
-        />
+            label={`${breakMinutesLabel} MIN BREAK`}
+            rightHint={breakHint}
+            variant="warning"
+            onPress={onStartBreak}
+          />
         )}
-        {(mode === 'break' || mode === 'grace') && (
+        {mode === 'session' && !hasBreakBudget && (
           <Button
-            label={mode === 'grace' ? 'RECLAIM TABLE' : "I'M BACK"}
+            label="BREAK USED"
+            variant="ghost"
+            onPress={() => {}}
+          />
+        )}
+        {mode === 'break' && (
+          <Button
+            label="I'M BACK"
             variant="success"
             onPress={onEndBreak}
           />
         )}
         <Button
-          label={mode === 'grace' ? 'GIVE UP' : 'END SESSION'}
-          variant={mode === 'grace' ? 'danger' : 'ghost'}
+          label="END SESSION"
+          variant="ghost"
           onPress={onEndSession}
         />
       </View>
@@ -142,16 +150,21 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
   },
   timeValue: {
-    fontFamily: theme.fonts.dot,
+    fontFamily: theme.fonts.display,
     fontSize: 20,
     color: theme.colors.text,
     letterSpacing: 0.5,
   },
-  arrow: { color: theme.colors.textFaint, paddingTop: 18, fontFamily: theme.fonts.mono },
+  arrow: {
+    color: theme.colors.textFaint,
+    paddingTop: 18,
+    fontFamily: theme.fonts.mono,
+  },
   ringWrap: { alignItems: 'center', justifyContent: 'center' },
   big: {
-    fontFamily: theme.fonts.dot,
+    fontFamily: theme.fonts.display,
     fontSize: 46,
+    color: theme.colors.text,
     fontVariant: ['tabular-nums'],
     letterSpacing: 2,
   },

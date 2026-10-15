@@ -49,13 +49,10 @@ export function MapScreen({ spaceId, onTablePress }: Props) {
             !!myId && !!reservation && reservation.user_id === myId;
 
           let breakRemainingSec: number | null = null;
-          let graceRemainingSec: number | null = null;
           let reserveRemainingSec: number | null = null;
 
           if (session?.status === 'on_break' && session.break_ends_at) {
             breakRemainingSec = secondsUntil(session.break_ends_at);
-          } else if (session?.status === 'on_break_expired' && session.grace_ends_at) {
-            graceRemainingSec = secondsUntil(session.grace_ends_at);
           } else if (reservation) {
             reserveRemainingSec = secondsUntil(reservation.expires_at);
           }
@@ -66,7 +63,6 @@ export function MapScreen({ spaceId, onTablePress }: Props) {
                 table={table}
                 isMine={!!isMine || !!isMyReservation}
                 breakRemainingSec={breakRemainingSec}
-                graceRemainingSec={graceRemainingSec}
                 reserveRemainingSec={reserveRemainingSec}
                 onPress={() => onTablePress(table.id)}
               />

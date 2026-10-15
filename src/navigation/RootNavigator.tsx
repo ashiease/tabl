@@ -80,17 +80,12 @@ export function RootNavigator() {
   const admin = isAdmin(state);
 
   // ─── Expiry tick ───
-  // Runs every second. Only expires the current user's sessions,
-  // breaks, grace periods, and reservations. Other users' expirations
-  // are handled server-side by expire_overdue_sessions() via pg_cron,
-  // and broadcast to us through realtime.
   useEffect(() => {
     const t = setInterval(async () => {
       const now = Date.now();
       const myId = state.profile?.id;
       if (!myId) return;
 
-      // My active sessions past ends_at
       const expiredActive = state.sessions.filter(
         s =>
           s.user_id === myId &&
@@ -106,37 +101,22 @@ export function RootNavigator() {
         }
       }
 
-      // My break expired → grace (server handles the DB transition;
-      // this toast is just a client-side nudge)
-      const breakExpired = state.sessions.filter(
+      const expiredBreak = state.sessions.filter(
         s =>
           s.user_id === myId &&
           s.status === 'on_break' &&
           s.break_ends_at &&
           new Date(s.break_ends_at).getTime() <= now
       );
-      for (const _s of breakExpired) {
-        toast.show('Break ended · 5 min grace', 'warning');
-      }
-
-      // My grace expired → session ends
-      const graceExpired = state.sessions.filter(
-        s =>
-          s.user_id === myId &&
-          s.status === 'on_break_expired' &&
-          s.grace_ends_at &&
-          new Date(s.grace_ends_at).getTime() <= now
-      );
-      for (const s of graceExpired) {
+      for (const s of expiredBreak) {
         try {
           await store.endSession(s.id, 'expired');
-          toast.show('Grace over · Session expired', 'error');
+          toast.show('Break over · Session ended', 'warning');
         } catch (e) {
-          console.warn('[tick] endSession (grace) failed:', e);
+          console.warn('[tick] endSession (break) failed:', e);
         }
       }
 
-      // My expired reservations
       const expiredRes = state.reservations.filter(
         r => r.user_id === myId && new Date(r.expires_at).getTime() <= now
       );
@@ -152,7 +132,16 @@ export function RootNavigator() {
     return () => clearInterval(t);
   }, [state.sessions, state.reservations, state.profile?.id, store, toast]);
 
-  // ─── Action wrappers (with toast) ───
+  // ─── Break budget ───
+  const breakBudgetRemaining = (() => {
+    const s = myActiveSession(state);
+    if (!s) return null;
+    const used = s.break_seconds_used ?? 0;
+    const total = BREAK_MINUTES * 60;
+    return Math.max(0, total - used);
+  })();
+
+  // ─── Action wrappers ───
 
   const startSession = useCallback(
     async (tableId: string) => {
@@ -218,12 +207,16 @@ export function RootNavigator() {
   const startBreak = useCallback(async () => {
     const s = myActiveSession(state);
     if (!s) return;
-    const breakEndsAt = new Date(Date.now() + BREAK_MINUTES * 60 * 1000).toISOString();
     try {
-      await store.startBreak(s.id, breakEndsAt);
-      toast.show(`Break started · ${BREAK_MINUTES} min`, 'warning');
+      await store.startBreak(s.id);
+      toast.show(`Break started`, 'warning');
     } catch (e: any) {
-      toast.show(e?.message ?? 'Break failed', 'error');
+      const msg = e?.message ?? 'Break failed';
+      if (msg.includes('no_break_time_left')) {
+        toast.show('No break time remaining', 'error');
+      } else {
+        toast.show(msg, 'error');
+      }
     }
   }, [state, store, toast]);
 
@@ -478,17 +471,14 @@ export function RootNavigator() {
   }, [confirm, store, toast]);
 
   // Header values
-  const sessionVariant: 'default' | 'away' | 'grace' = (() => {
+  const sessionVariant: 'default' | 'away' = (() => {
     const s = myActiveSession(state);
     if (s?.status === 'on_break') return 'away';
-    if (s?.status === 'on_break_expired') return 'grace';
     return 'default';
   })();
 
   const sessionTitle =
-    sessionVariant === 'away' ? 'Away'
-    : sessionVariant === 'grace' ? 'Grace'
-    : 'My Session';
+    sessionVariant === 'away' ? 'Away' : 'My Session';
 
   const sessionSubtitle = (() => {
     const s = myActiveSession(state);
@@ -595,6 +585,7 @@ export function RootNavigator() {
                 onStartBreak={startBreak}
                 onEndBreak={endBreak}
                 onEndSession={endSession}
+                breakBudgetRemaining={breakBudgetRemaining}
               />
             </>
           )}

@@ -19,7 +19,7 @@ interface StoreValue {
   scanToStart: (reservationId: string, endsAt: string) => Promise<void>;
   checkInDirect: (tableId: string, endsAt: string) => Promise<void>;
   endSession: (sessionId: string, reason: 'completed' | 'expired') => Promise<void>;
-  startBreak: (sessionId: string, breakEndsAt: string) => Promise<void>;
+  startBreak: (sessionId: string) => Promise<void>;
   endBreak: (sessionId: string) => Promise<void>;
   joinWaitlist: (tableId: string, spaceId: string) => Promise<void>;
   leaveWaitlist: (entryId: string) => Promise<void>;
@@ -42,7 +42,6 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
   // ─── Fetch helpers ───
 
-  // Sorts tables by space_id, then by the numeric suffix of the id.
   const fetchTables = useCallback(async () => {
     const { data } = await supabase.from('tables').select('*');
     const rows = (data ?? []) as Table[];
@@ -58,7 +57,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     const { data } = await supabase
       .from('sessions')
       .select('*')
-      .in('status', ['active', 'on_break', 'on_break_expired']);
+      .in('status', ['active', 'on_break']);
     return (data ?? []) as Session[];
   }, []);
 
@@ -78,14 +77,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     return (data ?? []) as WaitlistEntry[];
   }, []);
 
-  /**
-   * Fetch all profiles — but only if the caller is an admin.
-   * RLS now blocks students from reading other users' profiles, so a
-   * student would get zero rows. Rather than spam the network with a
-   * call that always returns empty for students, we check first.
-   */
   const fetchProfiles = useCallback(async (): Promise<Profile[]> => {
-    // Get current profile to know if admin
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return [];
 
@@ -95,9 +87,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       .eq('id', user.id)
       .single();
 
-    if (me?.role !== 'admin') {
-      return [];
-    }
+    if (me?.role !== 'admin') return [];
 
     const { data } = await supabase
       .from('profiles')
@@ -139,7 +129,6 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
           fetchProfile(),
         ]);
 
-      // Fetch profiles after we know the current user (for admin check)
       const profiles = await fetchProfiles();
 
       setState({ tables, sessions, reservations, waitlist, profiles, profile });
@@ -298,11 +287,10 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     await refreshAll();
   }, [refreshAll]);
 
-  const startBreak = useCallback(async (sessionId: string, breakEndsAt: string) => {
+  const startBreak = useCallback(async (sessionId: string) => {
     const { error } = await supabase.rpc('start_break', {
       p_session_id: sessionId,
-      p_break_ends_at: breakEndsAt,
-      p_break_duration: 15,
+      p_break_duration_minutes: 15,
     });
     if (error) throw error;
     await refreshAll();
