@@ -57,6 +57,8 @@ export function LoginScreen() {
             placeholder="••••••"
             placeholderTextColor={theme.colors.textFaint}
             secureTextEntry
+            autoCapitalize="none"
+            autoCorrect={false}
             style={styles.input}
           />
 
