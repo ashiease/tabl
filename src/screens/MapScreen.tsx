@@ -1,7 +1,11 @@
 import React, { useEffect, useState } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useStore } from '../state/store';
-import { sessionForTable, reservationForTable, tablesInSpace } from '../state/selectors';
+import {
+  sessionForTable,
+  reservationForTable,
+  tablesInSpace,
+} from '../state/selectors';
 import { findSpace } from '../constants/spaces';
 import { theme } from '../constants/theme';
 import { TableCard } from '../components/TableCard';
@@ -31,6 +35,7 @@ export function MapScreen({ spaceId, onTablePress }: Props) {
   }
 
   const tables = tablesInSpace(state, spaceId);
+  const myId = state.profile?.id;
 
   return (
     <ScrollView contentContainerStyle={styles.container}>
@@ -38,8 +43,10 @@ export function MapScreen({ spaceId, onTablePress }: Props) {
         {tables.map(table => {
           const session = sessionForTable(state, table.id);
           const reservation = reservationForTable(state, table.id);
-          const isMine = session?.user_id === state.profile?.id;
-          const isMyReservation = reservation?.user_id === state.profile?.id;
+
+          const isMine = !!myId && !!session && session.user_id === myId;
+          const isMyReservation =
+            !!myId && !!reservation && reservation.user_id === myId;
 
           let breakRemainingSec: number | null = null;
           let graceRemainingSec: number | null = null;
@@ -57,7 +64,6 @@ export function MapScreen({ spaceId, onTablePress }: Props) {
             <View key={table.id} style={styles.gridItem}>
               <TableCard
                 table={table}
-                ownerId={session && !isMine ? session.user_id : null}
                 isMine={!!isMine || !!isMyReservation}
                 breakRemainingSec={breakRemainingSec}
                 graceRemainingSec={graceRemainingSec}

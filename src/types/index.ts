@@ -71,5 +71,6 @@ export interface AppState {
   sessions: Session[];
   reservations: Reservation[];
   waitlist: WaitlistEntry[];
-  profile: Profile | null;
+  profiles: Profile[];         // ← new: all users, for owner name lookup
+  profile: Profile | null;     // current logged-in user
 }

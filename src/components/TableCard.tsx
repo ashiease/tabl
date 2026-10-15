@@ -6,7 +6,6 @@ import { formatTime } from '../utils/time';
 
 interface Props {
   table: Table;
-  ownerId?: string | null;
   isMine?: boolean;
   breakRemainingSec?: number | null;
   graceRemainingSec?: number | null;
@@ -16,7 +15,6 @@ interface Props {
 
 export function TableCard({
   table,
-  ownerId,
   isMine,
   breakRemainingSec,
   graceRemainingSec,
@@ -35,28 +33,36 @@ export function TableCard({
     : table.status === 'occupied' ? 'Occupied'
     : 'Away';
 
-  const mineBorder =
-    isMine && table.status === 'reserved'
-      ? { borderColor: theme.colors.blue }
-      : isMine
-      ? { borderColor: theme.colors.green }
-      : null;
+  // Neutral border, except when it's yours.
+  const borderColor =
+    isMine && table.status === 'reserved' ? theme.colors.blue
+    : isMine ? theme.colors.green
+    : theme.colors.border;
 
   return (
     <Pressable
       onPress={onPress}
-      style={({ pressed }) => [styles.card, mineBorder, pressed && styles.pressed]}
+      style={({ pressed }) => [
+        styles.card,
+        { borderColor },
+        pressed && styles.pressed,
+      ]}
     >
       <View style={[styles.topBar, { backgroundColor: accent }]} />
+
       <Text style={styles.label}>{table.label}</Text>
       <Text style={[styles.status, { color: accent }]}>{statusLabel}</Text>
 
-      {ownerId && !isMine && <Text style={styles.owner}>{ownerId}</Text>}
       {isMine && (
         <Text
           style={[
-            styles.owner,
-            { color: table.status === 'reserved' ? theme.colors.blue : theme.colors.green },
+            styles.you,
+            {
+              color:
+                table.status === 'reserved'
+                  ? theme.colors.blue
+                  : theme.colors.green,
+            },
           ]}
         >
           You
@@ -85,7 +91,6 @@ const styles = StyleSheet.create({
     padding: 14,
     backgroundColor: theme.colors.surface,
     borderWidth: 1,
-    borderColor: theme.colors.border,
     borderRadius: theme.radius,
     overflow: 'hidden',
     position: 'relative',
@@ -100,7 +105,7 @@ const styles = StyleSheet.create({
     height: 3,
   },
   label: {
-    fontFamily: theme.fonts.dot,
+    fontFamily: theme.fonts.display,
     fontSize: 22,
     color: theme.colors.text,
     letterSpacing: 0.5,
@@ -112,10 +117,9 @@ const styles = StyleSheet.create({
     letterSpacing: 1.5,
     textTransform: 'uppercase',
   },
-  owner: {
-    fontFamily: theme.fonts.mono,
+  you: {
+    fontFamily: theme.fonts.monoBold,
     fontSize: 8,
-    color: theme.colors.textFaint,
     marginTop: 2,
     letterSpacing: 1,
     textTransform: 'uppercase',

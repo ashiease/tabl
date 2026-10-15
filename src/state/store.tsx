@@ -11,11 +11,9 @@ interface StoreValue {
   ready: boolean;
   refreshAll: () => Promise<void>;
 
-  // Auth
   signIn: (username: string, password: string) => Promise<void>;
   signOut: () => Promise<void>;
 
-  // Actions
   reserve: (tableId: string, expiresAt: string) => Promise<void>;
   cancelReservation: (reservationId: string) => Promise<void>;
   scanToStart: (reservationId: string, endsAt: string) => Promise<void>;
@@ -32,16 +30,28 @@ const StoreContext = createContext<StoreValue | null>(null);
 
 export function StoreProvider({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<AppState>({
-    tables: [], sessions: [], reservations: [], waitlist: [], profile: null,
+    tables: [],
+    sessions: [],
+    reservations: [],
+    waitlist: [],
+    profiles: [],
+    profile: null,
   });
   const [ready, setReady] = useState(false);
   const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
 
   // ─── Fetch helpers ───
 
+  // Sorts tables by space_id, then by the numeric suffix of the id.
   const fetchTables = useCallback(async () => {
-    const { data } = await supabase.from('tables').select('*').order('id');
-    return (data ?? []) as Table[];
+    const { data } = await supabase.from('tables').select('*');
+    const rows = (data ?? []) as Table[];
+    return rows.sort((a, b) => {
+      if (a.space_id !== b.space_id) return a.space_id.localeCompare(b.space_id);
+      const an = parseInt(a.id.split('-').pop() || '0', 10);
+      const bn = parseInt(b.id.split('-').pop() || '0', 10);
+      return an - bn;
+    });
   }, []);
 
   const fetchSessions = useCallback(async () => {
@@ -69,11 +79,32 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   /**
-   * Fetch the current user's profile.
-   * Retries a few times because right after signIn the auth token can take
-   * a beat to be visible to `getUser()`. Without the retry, we'd return null
-   * and the app would look stuck on the login screen even though auth succeeded.
+   * Fetch all profiles — but only if the caller is an admin.
+   * RLS now blocks students from reading other users' profiles, so a
+   * student would get zero rows. Rather than spam the network with a
+   * call that always returns empty for students, we check first.
    */
+  const fetchProfiles = useCallback(async (): Promise<Profile[]> => {
+    // Get current profile to know if admin
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return [];
+
+    const { data: me } = await supabase
+      .from('profiles')
+      .select('role')
+      .eq('id', user.id)
+      .single();
+
+    if (me?.role !== 'admin') {
+      return [];
+    }
+
+    const { data } = await supabase
+      .from('profiles')
+      .select('id, username, display_name, role, hostel_id');
+    return (data ?? []) as Profile[];
+  }, []);
+
   const fetchProfile = useCallback(async (): Promise<Profile | null> => {
     for (let attempt = 0; attempt < 5; attempt++) {
       const { data: { user }, error: userErr } = await supabase.auth.getUser();
@@ -91,7 +122,6 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         }
         if (data) return data as Profile;
       }
-      // brief backoff and retry
       await new Promise(r => setTimeout(r, 200));
     }
     console.warn('[fetchProfile] gave up after retries');
@@ -100,23 +130,25 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
   const refreshAll = useCallback(async () => {
     try {
-      const [tables, sessions, reservations, waitlist, profile] = await Promise.all([
-        fetchTables(), fetchSessions(), fetchReservations(), fetchWaitlist(), fetchProfile(),
-      ]);
-      setState({ tables, sessions, reservations, waitlist, profile });
+      const [tables, sessions, reservations, waitlist, profile] =
+        await Promise.all([
+          fetchTables(),
+          fetchSessions(),
+          fetchReservations(),
+          fetchWaitlist(),
+          fetchProfile(),
+        ]);
+
+      // Fetch profiles after we know the current user (for admin check)
+      const profiles = await fetchProfiles();
+
+      setState({ tables, sessions, reservations, waitlist, profiles, profile });
     } catch (e) {
       console.warn('[refreshAll] failed:', e);
-      // still flip state so the app doesn't hang
       const profile = await fetchProfile().catch(() => null);
-      setState(prev => ({
-        tables: prev.tables,
-        sessions: prev.sessions,
-        reservations: prev.reservations,
-        waitlist: prev.waitlist,
-        profile,
-      }));
+      setState(prev => ({ ...prev, profile }));
     }
-  }, [fetchTables, fetchSessions, fetchReservations, fetchWaitlist, fetchProfile]);
+  }, [fetchTables, fetchSessions, fetchReservations, fetchWaitlist, fetchProfiles, fetchProfile]);
 
   // ─── Auth ───
 
@@ -135,20 +167,11 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     if (error) throw error;
     if (!data.session) throw new Error('Login failed: no session returned');
 
-    // Fetch state. If refreshAll throws (network, RLS), we still proceed —
-    // the profile fetch inside has retries, and realtime will populate the rest.
     try {
       await refreshAll();
     } catch (e) {
       console.warn('[signIn] refreshAll failed, continuing anyway:', e);
     }
-
-    // Belt and braces: verify the profile actually landed before flipping ready.
-    // If it didn't, do a single direct fetch one more time.
-    setState(prev => {
-      if (prev.profile) return prev;
-      return prev;
-    });
 
     console.log('[signIn] complete');
     setReady(true);
@@ -161,7 +184,9 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     } catch (e) {
       console.warn('[signOut] supabase signOut error:', e);
     }
-    setState({ tables: [], sessions: [], reservations: [], waitlist: [], profile: null });
+    setState({
+      tables: [], sessions: [], reservations: [], waitlist: [], profiles: [], profile: null,
+    });
     setReady(false);
     console.log('[signOut] done');
   }, []);

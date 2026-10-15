@@ -18,7 +18,6 @@ import {
   SESSION_SECONDS,
 } from '../constants/policy';
 import { theme } from '../constants/theme';
-import { computeExpiryActions } from '../logic/expiry';
 import { goToTab, goToHome } from './navRef';
 import { formatTime, secondsUntil } from '../utils/time';
 
@@ -80,20 +79,78 @@ export function RootNavigator() {
   const waitCount = myWaitlist(state).length;
   const admin = isAdmin(state);
 
-  // Expiry tick — client-side. Handles break expiry + reservation expiry UI-side.
-  // Server truth comes from realtime; this is for local countdown triggers.
+  // ─── Expiry tick ───
+  // Runs every second. Only expires the current user's sessions,
+  // breaks, grace periods, and reservations. Other users' expirations
+  // are handled server-side by expire_overdue_sessions() via pg_cron,
+  // and broadcast to us through realtime.
   useEffect(() => {
-    const t = setInterval(() => {
-      // Clear expired reservations client-side (server already does too)
+    const t = setInterval(async () => {
       const now = Date.now();
-      state.reservations.forEach(r => {
-        if (now > new Date(r.expires_at).getTime()) {
-          store.cancelReservation(r.id).catch(() => {});
+      const myId = state.profile?.id;
+      if (!myId) return;
+
+      // My active sessions past ends_at
+      const expiredActive = state.sessions.filter(
+        s =>
+          s.user_id === myId &&
+          s.status === 'active' &&
+          new Date(s.ends_at).getTime() <= now
+      );
+      for (const s of expiredActive) {
+        try {
+          await store.endSession(s.id, 'expired');
+          toast.show('60 minutes up · Session ended', 'warning');
+        } catch (e) {
+          console.warn('[tick] endSession (active) failed:', e);
         }
-      });
+      }
+
+      // My break expired → grace (server handles the DB transition;
+      // this toast is just a client-side nudge)
+      const breakExpired = state.sessions.filter(
+        s =>
+          s.user_id === myId &&
+          s.status === 'on_break' &&
+          s.break_ends_at &&
+          new Date(s.break_ends_at).getTime() <= now
+      );
+      for (const _s of breakExpired) {
+        toast.show('Break ended · 5 min grace', 'warning');
+      }
+
+      // My grace expired → session ends
+      const graceExpired = state.sessions.filter(
+        s =>
+          s.user_id === myId &&
+          s.status === 'on_break_expired' &&
+          s.grace_ends_at &&
+          new Date(s.grace_ends_at).getTime() <= now
+      );
+      for (const s of graceExpired) {
+        try {
+          await store.endSession(s.id, 'expired');
+          toast.show('Grace over · Session expired', 'error');
+        } catch (e) {
+          console.warn('[tick] endSession (grace) failed:', e);
+        }
+      }
+
+      // My expired reservations
+      const expiredRes = state.reservations.filter(
+        r => r.user_id === myId && new Date(r.expires_at).getTime() <= now
+      );
+      for (const r of expiredRes) {
+        try {
+          await store.cancelReservation(r.id);
+        } catch (e) {
+          console.warn('[tick] cancelReservation failed:', e);
+        }
+      }
     }, 1000);
+
     return () => clearInterval(t);
-  }, [state.reservations, store]);
+  }, [state.sessions, state.reservations, state.profile?.id, store, toast]);
 
   // ─── Action wrappers (with toast) ───
 

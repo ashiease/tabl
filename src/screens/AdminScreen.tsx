@@ -25,6 +25,40 @@ export function AdminScreen({ onReset }: Props) {
     ? Math.round(((reserved + occupied + onBreak) / total) * 100)
     : 0;
 
+  const usernameFor = (userId: string) => {
+    const p = state.profiles.find(x => x.id === userId);
+    return p?.username ?? '—';
+  };
+
+  // Every table that isn't available — occupied, on break, or reserved.
+  const liveTables = state.tables
+    .filter(t => t.status !== 'available')
+    .map(table => {
+      const session = state.sessions.find(
+        s =>
+          s.table_id === table.id &&
+          (s.status === 'active' ||
+            s.status === 'on_break' ||
+            s.status === 'on_break_expired')
+      );
+      const reservation = state.reservations.find(r => r.table_id === table.id);
+      const ownerId = session?.user_id ?? reservation?.user_id ?? null;
+      const owner = ownerId ? usernameFor(ownerId) : '—';
+      return {
+        label: table.label,
+        space: SPACES.find(s => s.id === table.space_id)?.name ?? table.space_id,
+        status: table.status,
+        owner,
+      };
+    })
+    .sort((a, b) => {
+      const order: Record<string, number> = { occupied: 0, on_break: 1, reserved: 2 };
+      const oa = order[a.status] ?? 9;
+      const ob = order[b.status] ?? 9;
+      if (oa !== ob) return oa - ob;
+      return a.label.localeCompare(b.label);
+    });
+
   return (
     <ScrollView contentContainerStyle={styles.container}>
       <SectionLabel label="Global" />
@@ -43,6 +77,43 @@ export function AdminScreen({ onReset }: Props) {
         <Row k="Completed" v={`${completed}`} />
         <Row k="Expired" v={`${expired}`} valueColor={theme.colors.red} />
       </View>
+
+      <SectionLabel label={`Live Tables · ${liveTables.length}`} />
+      {liveTables.length === 0 ? (
+        <View style={styles.infoCard}>
+          <Text style={styles.emptyLive}>All tables available</Text>
+        </View>
+      ) : (
+        <View style={styles.infoCard}>
+          {liveTables.map((row, i) => {
+            const accent =
+              row.status === 'occupied' ? theme.colors.red
+              : row.status === 'on_break' ? theme.colors.yellow
+              : theme.colors.blue;
+            return (
+              <View
+                key={`${row.label}-${i}`}
+                style={[
+                  styles.liveRow,
+                  i === liveTables.length - 1 && { borderBottomWidth: 0 },
+                ]}
+              >
+                <View style={styles.liveLeft}>
+                  <View style={[styles.liveDot, { backgroundColor: accent }]} />
+                  <Text style={styles.liveTable}>{row.label}</Text>
+                  <Text style={styles.liveSpace}>{row.space}</Text>
+                </View>
+                <View style={styles.liveRight}>
+                  <Text style={styles.liveOwner}>@{row.owner}</Text>
+                  <Text style={[styles.liveStatus, { color: accent }]}>
+                    {row.status === 'on_break' ? 'away' : row.status}
+                  </Text>
+                </View>
+              </View>
+            );
+          })}
+        </View>
+      )}
 
       <SectionLabel label="Per Space" />
       <View style={styles.infoCard}>
@@ -200,4 +271,50 @@ const styles = StyleSheet.create({
     color: theme.colors.text,
   },
   valueSmall: { fontFamily: theme.fonts.monoBold, fontSize: 11 },
+  emptyLive: {
+    fontFamily: theme.fonts.mono,
+    fontSize: 10,
+    color: theme.colors.textDim,
+    letterSpacing: 1.5,
+    textTransform: 'uppercase',
+    textAlign: 'center',
+    paddingVertical: 8,
+  },
+  liveRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: theme.colors.border,
+  },
+  liveLeft: { flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 },
+  liveDot: { width: 6, height: 6, borderRadius: 3 },
+  liveTable: {
+    fontFamily: theme.fonts.display,
+    fontSize: 14,
+    color: theme.colors.text,
+    letterSpacing: 0.5,
+  },
+  liveSpace: {
+    fontFamily: theme.fonts.mono,
+    fontSize: 9,
+    color: theme.colors.textDim,
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+  },
+  liveRight: { alignItems: 'flex-end' },
+  liveOwner: {
+    fontFamily: theme.fonts.monoBold,
+    fontSize: 10,
+    color: theme.colors.text,
+    letterSpacing: 1,
+  },
+  liveStatus: {
+    fontFamily: theme.fonts.mono,
+    fontSize: 8,
+    letterSpacing: 1.5,
+    textTransform: 'uppercase',
+    marginTop: 2,
+  },
 });

@@ -1,10 +1,10 @@
 export const theme = {
   colors: {
     bg: '#000000',
-    surface: '#0a0a0a',
-    surface2: '#141414',
-    border: '#1f1f1f',
-    borderBright: '#2e2e2e',
+    surface: '#141414',        // was #0a0a0a — lifted
+    surface2: '#1a1a1a',       // was #141414 — bumped to keep the layered hierarchy
+    border: '#262626',         // was #1f1f1f — slightly brighter edge
+    borderBright: '#3a3a3a',   // was #2e2e2e
     text: '#ffffff',
     textDim: '#808080',
     textFaint: '#4a4a4a',
