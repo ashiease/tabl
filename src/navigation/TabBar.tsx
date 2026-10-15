@@ -2,14 +2,19 @@ import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { MaterialIcons } from '@expo/vector-icons';
 import { theme } from '../constants/theme';
 
-const ICONS: Record<string, string> = {
-  Home: '◱',
-  Session: '◷',
-  Wait: '≡',
-  Scan: '#',
+type IconName = React.ComponentProps<typeof MaterialIcons>['name'];
+
+const TAB_ICONS: Record<string, IconName> = {
+  Home: 'home',
+  Session: 'access-time',
+  Wait: 'list',
+  Scan: 'qr-code-scanner',
 };
+
+const SCAN_TAB = 'Scan';
 
 export function TabBar({ state, descriptors, navigation }: BottomTabBarProps) {
   const insets = useSafeAreaInsets();
@@ -24,6 +29,7 @@ export function TabBar({ state, descriptors, navigation }: BottomTabBarProps) {
       {state.routes.map((route, index) => {
         const { options } = descriptors[route.key];
         const isFocused = state.index === index;
+        const isScan = route.name === SCAN_TAB;
 
         const onPress = () => {
           const event = navigation.emit({
@@ -43,6 +49,24 @@ export function TabBar({ state, descriptors, navigation }: BottomTabBarProps) {
         const badgeFg =
           (options.tabBarBadgeStyle as any)?.color ?? '#fff';
 
+        const iconName = TAB_ICONS[route.name] ?? 'circle';
+
+        // ─── Icon color rules ───
+        // Non-scan tabs: white when active, faint gray when inactive
+        // Scan tab: white when active, dim green when inactive
+        const iconColor = isFocused
+          ? theme.colors.text
+          : isScan
+          ? 'rgba(34, 197, 94, 0.55)' // dim green
+          : theme.colors.textFaint;
+
+        // ─── Label color rules ───
+        // Same as icons, but Scan's label stays faint gray when inactive
+        // (only the icon wears the green accent)
+        const labelColor = isFocused
+          ? theme.colors.text
+          : theme.colors.textFaint;
+
         return (
           <Pressable
             key={route.key}
@@ -50,29 +74,39 @@ export function TabBar({ state, descriptors, navigation }: BottomTabBarProps) {
             style={({ pressed }) => [styles.item, pressed && { opacity: 0.7 }]}
           >
             {isFocused && <View style={styles.activeBar} />}
-            <View style={styles.iconWrap}>
-              <Text
+
+            {isScan ? (
+              <View
                 style={[
-                  styles.icon,
-                  { color: isFocused ? theme.colors.text : theme.colors.textFaint },
+                  styles.scanContainer,
+                  isFocused
+                    ? styles.scanContainerActive
+                    : styles.scanContainerInactive,
                 ]}
               >
-                {ICONS[route.name] ?? '·'}
-              </Text>
-              {badge !== undefined && (
-                <View style={[styles.badge, { backgroundColor: badgeBg }]}>
-                  <Text style={[styles.badgeText, { color: badgeFg }]}>
-                    {badge}
-                  </Text>
-                </View>
-              )}
-            </View>
-            <Text
-              style={[
-                styles.label,
-                { color: isFocused ? theme.colors.text : theme.colors.textFaint },
-              ]}
-            >
+                <MaterialIcons name={iconName} size={22} color={iconColor} />
+                {badge !== undefined && (
+                  <View style={[styles.badge, { backgroundColor: badgeBg }]}>
+                    <Text style={[styles.badgeText, { color: badgeFg }]}>
+                      {badge}
+                    </Text>
+                  </View>
+                )}
+              </View>
+            ) : (
+              <View style={styles.iconWrap}>
+                <MaterialIcons name={iconName} size={22} color={iconColor} />
+                {badge !== undefined && (
+                  <View style={[styles.badge, { backgroundColor: badgeBg }]}>
+                    <Text style={[styles.badgeText, { color: badgeFg }]}>
+                      {badge}
+                    </Text>
+                  </View>
+                )}
+              </View>
+            )}
+
+            <Text style={[styles.label, { color: labelColor }]}>
               {route.name.toUpperCase()}
             </Text>
           </Pressable>
@@ -88,7 +122,7 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.bg,
     borderTopWidth: 1,
     borderTopColor: theme.colors.border,
-    paddingTop: 8,
+    paddingTop: 10,
   },
   item: {
     flex: 1,
@@ -99,19 +133,41 @@ const styles = StyleSheet.create({
   },
   activeBar: {
     position: 'absolute',
-    top: -9,
-    width: 35,
+    top: -11,
+    width: 24,
     height: 2,
     backgroundColor: theme.colors.green,
   },
-  iconWrap: {
-    position: 'relative',
+
+  // Container for the Scan icon
+  scanContainer: {
+    width: 32,
+    height: 28,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
     marginBottom: 4,
   },
-  icon: {
-    fontFamily: theme.fonts.mono,
-    fontSize: 16,
+  scanContainerInactive: {
+    backgroundColor: 'rgba(34, 197, 94, 0.10)',
+    borderWidth: 1,
+    borderColor: 'rgba(34, 197, 94, 0.25)',
   },
+  scanContainerActive: {
+    backgroundColor: 'rgba(34, 197, 94, 0.20)',
+    borderWidth: 1,
+    borderColor: 'rgba(34, 197, 94, 0.55)',
+  },
+
+  // Container for non-scan icons (kept for consistent vertical alignment)
+  iconWrap: {
+    width: 32,
+    height: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 4,
+  },
+
   label: {
     fontFamily: theme.fonts.monoBold,
     fontSize: 9,
@@ -120,7 +176,7 @@ const styles = StyleSheet.create({
   badge: {
     position: 'absolute',
     top: -6,
-    right: -12,
+    right: -2,
     minWidth: 14,
     height: 14,
     borderRadius: 7,
