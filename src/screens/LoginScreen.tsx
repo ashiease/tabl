@@ -1,6 +1,13 @@
 import React, { useState } from 'react';
 import {
-  KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, TextInput, View,
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useStore } from '../state/store';
@@ -15,6 +22,7 @@ export function LoginScreen() {
   const [err, setErr] = useState<string | null>(null);
 
   const onSubmit = async () => {
+    if (!username || !password) return;
     setBusy(true);
     setErr(null);
     try {
@@ -28,15 +36,29 @@ export function LoginScreen() {
 
   return (
     <KeyboardAvoidingView
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       style={styles.root}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      keyboardVerticalOffset={0}
     >
-      <View style={[styles.wrap, { paddingTop: insets.top + 60, paddingBottom: insets.bottom + 40 }]}>
+      <ScrollView
+        contentContainerStyle={[
+          styles.scrollContent,
+          {
+            paddingTop: insets.top + 60,
+            paddingBottom: insets.bottom + 40,
+          },
+        ]}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+        bounces={false}
+      >
         <View style={styles.brand}>
           <View style={styles.brandBar} />
           <Text style={styles.brandText}>TABL</Text>
           <Text style={styles.brandSub}>SHARED STUDY SPACE</Text>
         </View>
+
+        <View style={styles.spacer} />
 
         <View style={styles.form}>
           <Text style={styles.label}>Username</Text>
@@ -47,6 +69,8 @@ export function LoginScreen() {
             placeholderTextColor={theme.colors.textFaint}
             autoCapitalize="none"
             autoCorrect={false}
+            autoComplete="username"
+            returnKeyType="next"
             style={styles.input}
           />
 
@@ -59,6 +83,9 @@ export function LoginScreen() {
             secureTextEntry
             autoCapitalize="none"
             autoCorrect={false}
+            autoComplete="password"
+            returnKeyType="done"
+            onSubmitEditing={onSubmit}
             style={styles.input}
           />
 
@@ -76,49 +103,78 @@ export function LoginScreen() {
             <Text style={styles.btnText}>{busy ? 'SIGNING IN…' : 'SIGN IN'}</Text>
           </Pressable>
         </View>
-      </View>
+      </ScrollView>
     </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: theme.colors.bg },
-  wrap: { flex: 1, paddingHorizontal: 32, justifyContent: 'space-between' },
+  scrollContent: {
+    flexGrow: 1,
+    paddingHorizontal: 32,
+    justifyContent: 'space-between',
+  },
   brand: { alignItems: 'flex-start' },
-  brandBar: { width: 32, height: 2, backgroundColor: theme.colors.green, marginBottom: 12 },
+  brandBar: {
+    width: 32,
+    height: 2,
+    backgroundColor: theme.colors.green,
+    marginBottom: 12,
+  },
   brandText: {
-    fontFamily: theme.fonts.display, fontSize: 48,
-    color: theme.colors.text, letterSpacing: 2,
+    fontFamily: theme.fonts.display,
+    fontSize: 48,
+    color: theme.colors.text,
+    letterSpacing: 2,
   },
   brandSub: {
-    fontFamily: theme.fonts.mono, fontSize: 10,
-    color: theme.colors.textDim, letterSpacing: 3, marginTop: 8,
+    fontFamily: theme.fonts.mono,
+    fontSize: 10,
+    color: theme.colors.textDim,
+    letterSpacing: 3,
+    marginTop: 8,
   },
+  spacer: { flex: 1, minHeight: 40 },
   form: {},
   label: {
-    fontFamily: theme.fonts.monoBold, fontSize: 10,
-    color: theme.colors.textDim, letterSpacing: 2,
-    textTransform: 'uppercase', marginBottom: 8,
+    fontFamily: theme.fonts.monoBold,
+    fontSize: 10,
+    color: theme.colors.textDim,
+    letterSpacing: 2,
+    textTransform: 'uppercase',
+    marginBottom: 8,
   },
   input: {
     backgroundColor: theme.colors.surface,
-    borderWidth: 1, borderColor: theme.colors.borderBright,
+    borderWidth: 1,
+    borderColor: theme.colors.borderBright,
     borderRadius: theme.radius,
-    paddingVertical: 14, paddingHorizontal: 16,
-    color: theme.colors.text, fontFamily: theme.fonts.mono,
-    fontSize: 14, letterSpacing: 1,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    color: theme.colors.text,
+    fontFamily: theme.fonts.mono,
+    fontSize: 14,
+    letterSpacing: 1,
   },
   err: {
-    fontFamily: theme.fonts.mono, fontSize: 11,
-    color: theme.colors.red, marginTop: 12, letterSpacing: 1,
+    fontFamily: theme.fonts.mono,
+    fontSize: 11,
+    color: theme.colors.red,
+    marginTop: 12,
+    letterSpacing: 1,
   },
   btn: {
-    marginTop: 24, paddingVertical: 16,
-    backgroundColor: theme.colors.green, borderRadius: theme.radius,
+    marginTop: 24,
+    paddingVertical: 16,
+    backgroundColor: theme.colors.green,
+    borderRadius: theme.radius,
     alignItems: 'center',
   },
   btnText: {
-    fontFamily: theme.fonts.monoBold, fontSize: 12,
-    color: '#061a0d', letterSpacing: 2,
+    fontFamily: theme.fonts.monoBold,
+    fontSize: 12,
+    color: '#061a0d',
+    letterSpacing: 2,
   },
 });

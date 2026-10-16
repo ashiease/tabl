@@ -26,8 +26,11 @@
         "backgroundColor": "#000000"
       },
       "permissions": [
-        "android.permission.CAMERA"
-      ]
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO"
+      ],
+      "package": "com.ashieasesteam.tabl",
+      "softwareKeyboardLayoutMode": "resize"
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -40,6 +43,11 @@
         }
       ],
       "expo-font"
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "27af94a0-1e03-4cf4-b84c-1285f2cae5ab"
+      }
+    }
   }
 }
