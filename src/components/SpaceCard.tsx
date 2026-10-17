@@ -25,7 +25,7 @@ export function SpaceCard({ space, counts, isHome, onPress }: Props) {
         {isHome && <Text style={styles.homeTag}>·HOME</Text>}
       </View>
       <Text style={styles.meta}>
-        <Text style={{ color: accent, fontFamily: theme.fonts.monoBold }}>
+        <Text style={{ color: accent, fontFamily: theme.fonts.sansSemi }}>
           {counts.available}
         </Text>
         <Text style={{ color: theme.colors.textDim }}>
@@ -57,10 +57,10 @@ const styles = StyleSheet.create({
   },
   labelRow: { flexDirection: 'row', alignItems: 'baseline', gap: 6 },
   label: {
-    fontFamily: theme.fonts.dot,
+    fontFamily: theme.fonts.sansSemi,
     fontSize: 16,
     color: theme.colors.text,
-    letterSpacing: 0.5,
+    letterSpacing: 0,
   },
   homeTag: {
     fontFamily: theme.fonts.mono,

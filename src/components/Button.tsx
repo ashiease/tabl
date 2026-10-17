@@ -78,17 +78,16 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   text: {
-    fontFamily: theme.fonts.monoBold,
-    fontSize: 11,
-    letterSpacing: 2,
-    textTransform: 'uppercase',
+    fontFamily: theme.fonts.sansSemi,
+    fontSize: 13,
+    letterSpacing: 0,
   },
   hint: {
     position: 'absolute',
     right: 14,
     fontFamily: theme.fonts.mono,
-    fontSize: 9,
+    fontSize: 11,
     color: theme.colors.textDim,
-    letterSpacing: 1,
+    letterSpacing: 0,
   },
 });

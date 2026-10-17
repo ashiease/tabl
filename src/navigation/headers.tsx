@@ -7,7 +7,7 @@ import { Profile } from '../types';
 interface Props {
   title: string;
   subtitle: string;
-  titleVariant?: 'default' | 'away';
+  titleVariant?: 'default' | 'away' | 'grace';
   profile: Profile;
   onUserPress: () => void;
   showTopAccent?: boolean;
@@ -24,7 +24,9 @@ export function AppHeader({
   const insets = useSafeAreaInsets();
 
   const titleColor =
-    titleVariant === 'away' ? theme.colors.yellow : theme.colors.text;
+    titleVariant === 'away' ? theme.colors.yellow
+    : titleVariant === 'grace' ? theme.colors.red
+    : theme.colors.text;
 
   return (
     <View style={[styles.wrap, { paddingTop: insets.top + 12 }]}>

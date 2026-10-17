@@ -180,20 +180,72 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     console.log('[signOut] done');
   }, []);
 
-  // ─── Bootstrap ───
-
+  // ─── Bootstrap + auth state listener ───
+  //
+  // On cold start, we read the persisted session from AsyncStorage. If
+  // it exists, we hydrate state and mark the app as ready.
+  //
+  // We also subscribe to onAuthStateChange so:
+  //   - a `SIGNED_OUT` event (from any source) clears state and shows Login
+  //   - a `TOKEN_REFRESHED` event re-triggers refreshAll so the user's
+  //     profile and data stay fresh across the day
   useEffect(() => {
+    let mounted = true;
+
     (async () => {
       try {
-        const { data: { session } } = await supabase.auth.getSession();
-        if (session) {
+        console.log('[bootstrap] checking stored session…');
+        const { data: { session }, error } = await supabase.auth.getSession();
+
+        if (error) {
+          console.warn('[bootstrap] getSession error:', error.message);
+        }
+
+        console.log(
+          '[bootstrap] session:',
+          session ? `user=${session.user.id}` : 'none'
+        );
+
+        if (session && mounted) {
           await refreshAll();
-          setReady(true);
+          if (mounted) {
+            setReady(true);
+            console.log('[bootstrap] ready with profile');
+          }
+        } else if (mounted) {
+          setReady(false);
         }
       } catch (e) {
         console.warn('[bootstrap] failed:', e);
+        if (mounted) setReady(false);
       }
     })();
+
+    const { data: sub } = supabase.auth.onAuthStateChange(async (event, session) => {
+      console.log(
+        '[auth event]',
+        event,
+        session ? `user=${session.user.id}` : 'no session'
+      );
+
+      if (event === 'SIGNED_OUT') {
+        setState({
+          tables: [], sessions: [], reservations: [], waitlist: [], profiles: [], profile: null,
+        });
+        setReady(false);
+      } else if (event === 'SIGNED_IN' && session) {
+        // signIn() already handles its own refreshAll, but this catches
+        // other sign-in paths (e.g. auto-refresh from stored token).
+        refreshAll().catch(() => {});
+      } else if (event === 'TOKEN_REFRESHED' && session) {
+        refreshAll().catch(() => {});
+      }
+    });
+
+    return () => {
+      mounted = false;
+      sub.subscription.unsubscribe();
+    };
   }, [refreshAll]);
 
   // ─── Realtime ───

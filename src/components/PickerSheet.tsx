@@ -133,11 +133,11 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.green,
   },
   title: {
-    fontFamily: theme.fonts.dot,
+    fontFamily: theme.fonts.sansSemi,
     fontSize: 18,
     color: theme.colors.text,
     textTransform: 'uppercase',
-    letterSpacing: 0.5,
+    letterSpacing: 0,
     marginBottom: 8,
   },
   message: {

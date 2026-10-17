@@ -72,7 +72,7 @@ export function TabBar({ state, descriptors, navigation }: BottomTabBarProps) {
           >
             {isFocused && <View style={styles.activeBar} />}
             <View style={styles.iconWrap}>
-              <MaterialIcons name={iconName} size={18} color={iconColor} />
+              <MaterialIcons name={iconName} size={25} color={iconColor} />
               {badge !== undefined && (
                 <View style={[styles.badge, { backgroundColor: badgeBg }]}>
                   <Text style={[styles.badgeText, { color: badgeFg }]}>
@@ -82,7 +82,7 @@ export function TabBar({ state, descriptors, navigation }: BottomTabBarProps) {
               )}
             </View>
             <Text style={[styles.label, { color: iconColor }]}>
-              {route.name.toUpperCase()}
+              {route.name}
             </Text>
           </Pressable>
         );
@@ -118,9 +118,9 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
   label: {
-    fontFamily: theme.fonts.monoBold,
-    fontSize: 9,
-    letterSpacing: 1.5,
+    fontFamily: theme.fonts.sansSemi,
+    fontSize: 10,
+    letterSpacing: 0,
   },
   badge: {
     position: 'absolute',
@@ -134,7 +134,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 3,
   },
   badgeText: {
-    fontFamily: theme.fonts.monoBold,
+    fontFamily: theme.fonts.sansSemi,
     fontSize: 9,
   },
 });

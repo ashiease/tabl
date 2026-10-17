@@ -478,7 +478,7 @@ export function RootNavigator() {
   })();
 
   const sessionTitle =
-    sessionVariant === 'away' ? 'Away' : 'My Session';
+    sessionVariant === 'away' ? 'Away' : 'Session';
 
   const sessionSubtitle = (() => {
     const s = myActiveSession(state);
@@ -562,7 +562,7 @@ export function RootNavigator() {
           tabBarBadgeStyle: {
             backgroundColor: route.name === 'Session' ? theme.colors.green : theme.colors.red,
             color: route.name === 'Session' ? '#061a0d' : '#fff',
-            fontFamily: theme.fonts.monoBold,
+            fontFamily: theme.fonts.sansSemi,
             fontSize: 9,
           },
         })}

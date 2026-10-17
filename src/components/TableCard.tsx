@@ -68,7 +68,7 @@ export function TableCard({
 
       {reserveRemainingSec != null && (
         <Text style={[styles.extra, { color: theme.colors.blue }]}>
-          SCAN IN {formatTime(reserveRemainingSec)}
+          Scan in {formatTime(reserveRemainingSec)}
         </Text>
       )}
       {breakRemainingSec != null && (
@@ -100,27 +100,25 @@ const styles = StyleSheet.create({
     fontFamily: theme.fonts.display,
     fontSize: 22,
     color: theme.colors.text,
-    letterSpacing: 0.5,
+    letterSpacing: 0,
   },
   status: {
-    fontFamily: theme.fonts.monoBold,
-    fontSize: 9,
+    fontFamily: theme.fonts.sansSemi,
+    fontSize: 11,
     marginTop: 6,
-    letterSpacing: 1.5,
-    textTransform: 'uppercase',
+    letterSpacing: 0.2,
   },
   you: {
-    fontFamily: theme.fonts.monoBold,
-    fontSize: 8,
+    fontFamily: theme.fonts.sansSemi,
+    fontSize: 11,
     marginTop: 2,
-    letterSpacing: 1,
-    textTransform: 'uppercase',
+    letterSpacing: 0,
   },
   extra: {
-    fontFamily: theme.fonts.mono,
-    fontSize: 10,
+    fontFamily: theme.fonts.sansSemi,
+    fontSize: 11,
     color: theme.colors.yellow,
     marginTop: 6,
-    letterSpacing: 1,
+    letterSpacing: 0,
   },
 });

@@ -94,7 +94,7 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.green,
   },
   title: {
-    fontFamily: theme.fonts.dot,
+    fontFamily: theme.fonts.sansSemi,
     fontSize: 18,
     color: theme.colors.text,
     textTransform: 'uppercase',

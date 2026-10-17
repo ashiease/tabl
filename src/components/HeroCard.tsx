@@ -19,10 +19,10 @@ export function HeroCard({ space, tag, counts, onPress }: Props) {
       >
         <View>
           <Text style={styles.tag}>{tag}</Text>
-          <Text style={styles.label}>SET{'\n'}HOSTEL</Text>
+          <Text style={styles.label}>Set{'\n'}hostel</Text>
         </View>
         <Text style={[styles.meta, { color: theme.colors.textFaint }]}>
-          TAP TO PICK
+          Tap to pick
         </Text>
       </Pressable>
     );
@@ -42,7 +42,7 @@ export function HeroCard({ space, tag, counts, onPress }: Props) {
         <Text style={styles.label}>{space.name}</Text>
       </View>
       <Text style={styles.meta}>
-        <Text style={{ color: accentColor, fontFamily: theme.fonts.monoBold }}>
+        <Text style={{ color: accentColor, fontFamily: theme.fonts.sansSemi }}>
           {counts.available}
         </Text>
         <Text style={{ color: theme.colors.textDim }}>
@@ -67,7 +67,10 @@ const styles = StyleSheet.create({
     position: 'relative',
   },
   unset: { borderColor: theme.colors.border },
-  pressed: { opacity: 0.85, transform: [{ scale: 0.98 }] },
+  pressed: {
+    opacity: 0.85,
+    transform: [{ scale: 0.98 }],
+  },
   topBar: {
     position: 'absolute',
     top: 0,
@@ -76,26 +79,25 @@ const styles = StyleSheet.create({
     height: 3,
   },
   tag: {
-    fontFamily: theme.fonts.mono,
-    fontSize: 8,
-    color: theme.colors.textFaint,
-    letterSpacing: 2.5,
+    fontFamily: theme.fonts.sansSemi,
+    fontSize: 10,
+    color: theme.colors.textDim,
+    letterSpacing: 1.2,
     textTransform: 'uppercase',
     marginBottom: 8,
   },
   label: {
-    fontFamily: theme.fonts.dot,
+    fontFamily: theme.fonts.sansBold,
     fontSize: 22,
     color: theme.colors.text,
+    letterSpacing: -0.3,
     lineHeight: 26,
-    textTransform: 'uppercase',
   },
   meta: {
-    fontFamily: theme.fonts.mono,
-    fontSize: 10,
+    fontFamily: theme.fonts.sans,
+    fontSize: 12,
     color: theme.colors.textDim,
-    letterSpacing: 1.5,
-    textTransform: 'uppercase',
+    letterSpacing: 0,
     marginTop: 14,
   },
 });

@@ -109,10 +109,10 @@ import React, {
       zIndex: 999,
     },
     text: {
-      fontFamily: theme.fonts.monoBold,
+      fontFamily: theme.fonts.sansSemi,
       fontSize: 10,
       color: theme.colors.text,
-      letterSpacing: 1.5,
+      letterSpacing: 0,
       textTransform: 'uppercase',
     },
   });
