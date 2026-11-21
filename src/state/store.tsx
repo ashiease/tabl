@@ -3,8 +3,19 @@ import React, {
 } from 'react';
 import { AppState as RNAppState, AppStateStatus } from 'react-native';
 import { supabase } from '../lib/supabase';
-import { AppState, Profile, Table, Session, Reservation, WaitlistEntry } from '../types';
+import {
+  AppState, Profile, Table, Session, Reservation, WaitlistEntry,
+  Policy, Borrow, BlockBooking, LostItem, Announcement, AppNotification, MyStatus, WaitPosition,
+} from '../types';
 import { newId } from '../logic/sessions';
+import { registerForPush, unregisterPush } from '../lib/push';
+
+export type ReportKind =
+  | 'sitting_without_scanning'
+  | 'asked_to_leave'
+  | 'belongings_left'
+  | 'damaged'
+  | 'other';
 
 interface StoreValue {
   state: AppState;
@@ -24,21 +35,28 @@ interface StoreValue {
   joinWaitlist: (tableId: string, spaceId: string) => Promise<void>;
   leaveWaitlist: (entryId: string) => Promise<void>;
   setHostel: (spaceId: string) => Promise<void>;
+
+  borrowTable: (tableId: string) => Promise<void>;
+  endBorrow: () => Promise<void>;
+  reportTable: (tableId: string, kind: ReportKind, note?: string) => Promise<void>;
+  markNotificationsRead: () => Promise<void>;
+  /** Call any admin_* function; refreshes afterwards. */
+  adminCall: <T = any>(fn: string, args?: Record<string, any>) => Promise<T>;
 }
+
+const EMPTY: AppState = {
+  tables: [], sessions: [], reservations: [], waitlist: [], profiles: [], profile: null,
+  policy: null, borrows: [], blocks: [], lostItems: [], announcements: [], notifications: [],
+  myStatus: null, waitPositions: [], waitCounts: {},
+};
 
 const StoreContext = createContext<StoreValue | null>(null);
 
 export function StoreProvider({ children }: { children: React.ReactNode }) {
-  const [state, setState] = useState<AppState>({
-    tables: [],
-    sessions: [],
-    reservations: [],
-    waitlist: [],
-    profiles: [],
-    profile: null,
-  });
+  const [state, setState] = useState<AppState>(EMPTY);
   const [ready, setReady] = useState(false);
   const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
+  const pushTokenRef = useRef<string | null>(null);
 
   // ─── Fetch helpers ───
 
@@ -70,11 +88,41 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const fetchWaitlist = useCallback(async () => {
-    const { data } = await supabase
-      .from('waitlist')
-      .select('*')
-      .eq('status', 'waiting');
-    return (data ?? []) as WaitlistEntry[];
+    const [{ data }, pos, counts] = await Promise.all([
+      supabase.from('waitlist').select('*').eq('status', 'waiting'),
+      supabase.rpc('my_waitlist_positions'),
+      supabase.rpc('waitlist_counts'),
+    ]);
+    const waitCounts: Record<string, number> = {};
+    for (const r of (counts.data ?? []) as { table_id: string; waiting: number }[]) waitCounts[r.table_id] = r.waiting;
+    return {
+      waitlist: (data ?? []) as WaitlistEntry[],
+      waitPositions: (pos.data ?? []) as WaitPosition[],
+      waitCounts,
+    };
+  }, []);
+
+  const fetchExtras = useCallback(async () => {
+    const nowIso = new Date().toISOString();
+    const [policy, borrows, blocks, lost, ann, notes, status] = await Promise.all([
+      supabase.from('app_policy').select('*').eq('id', 1).maybeSingle(),
+      supabase.from('table_borrows').select('*').eq('status', 'active'),
+      supabase.from('block_bookings').select('*').is('cancelled_at', null).gt('ends_at', nowIso),
+      supabase.from('lost_items').select('*').neq('status', 'returned'),
+      supabase.from('announcements').select('*').gt('expires_at', nowIso).order('created_at', { ascending: false }),
+      supabase.from('notifications').select('id, title, body, data, created_at, read_at')
+        .order('created_at', { ascending: false }).limit(40),
+      supabase.rpc('my_status'),
+    ]);
+    return {
+      policy: (policy.data ?? null) as Policy | null,
+      borrows: (borrows.data ?? []) as Borrow[],
+      blocks: (blocks.data ?? []) as BlockBooking[],
+      lostItems: (lost.data ?? []) as LostItem[],
+      announcements: (ann.data ?? []) as Announcement[],
+      notifications: (notes.data ?? []) as AppNotification[],
+      myStatus: (status.data ?? null) as MyStatus | null,
+    };
   }, []);
 
   const fetchProfiles = useCallback(async (): Promise<Profile[]> => {
@@ -91,7 +139,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
     const { data } = await supabase
       .from('profiles')
-      .select('id, username, display_name, role, hostel_id');
+      .select('id, username, display_name, role, hostel_id, suspended_until, suspended_reason');
     return (data ?? []) as Profile[];
   }, []);
 
@@ -120,24 +168,25 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
   const refreshAll = useCallback(async () => {
     try {
-      const [tables, sessions, reservations, waitlist, profile] =
+      const [tables, sessions, reservations, wait, extras, profile] =
         await Promise.all([
           fetchTables(),
           fetchSessions(),
           fetchReservations(),
           fetchWaitlist(),
+          fetchExtras(),
           fetchProfile(),
         ]);
 
       const profiles = await fetchProfiles();
 
-      setState({ tables, sessions, reservations, waitlist, profiles, profile });
+      setState({ tables, sessions, reservations, ...wait, ...extras, profiles, profile });
     } catch (e) {
       console.warn('[refreshAll] failed:', e);
       const profile = await fetchProfile().catch(() => null);
       setState(prev => ({ ...prev, profile }));
     }
-  }, [fetchTables, fetchSessions, fetchReservations, fetchWaitlist, fetchProfiles, fetchProfile]);
+  }, [fetchTables, fetchSessions, fetchReservations, fetchWaitlist, fetchExtras, fetchProfiles, fetchProfile]);
 
   // ─── Auth ───
 
@@ -168,14 +217,15 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
   const signOut = useCallback(async () => {
     console.log('[signOut] signing out');
+    // stop push notifications to this phone for this account
+    await unregisterPush(pushTokenRef.current).catch(() => {});
+    pushTokenRef.current = null;
     try {
       await supabase.auth.signOut();
     } catch (e) {
       console.warn('[signOut] supabase signOut error:', e);
     }
-    setState({
-      tables: [], sessions: [], reservations: [], waitlist: [], profiles: [], profile: null,
-    });
+    setState(EMPTY);
     setReady(false);
     console.log('[signOut] done');
   }, []);
@@ -229,9 +279,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       );
 
       if (event === 'SIGNED_OUT') {
-        setState({
-          tables: [], sessions: [], reservations: [], waitlist: [], profiles: [], profile: null,
-        });
+        setState(EMPTY);
         setReady(false);
       } else if (event === 'SIGNED_IN' && session) {
         // signIn() already handles its own refreshAll, but this catches
@@ -248,16 +296,32 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     };
   }, [refreshAll]);
 
+  // ─── Push notifications: register this phone once signed in ───
+
+  useEffect(() => {
+    if (!ready) return;
+    registerForPush()
+      .then(token => {
+        pushTokenRef.current = token;
+      })
+      .catch(e => console.warn('[push] register failed:', e));
+  }, [ready]);
+
   // ─── Realtime ───
 
   useEffect(() => {
     if (!ready) return;
 
+    const refreshExtras = async () => {
+      const extras = await fetchExtras();
+      setState(s => ({ ...s, ...extras }));
+    };
+
     const ch = supabase
       .channel('tabl-realtime')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'tables' }, async () => {
-        const tables = await fetchTables();
-        setState(s => ({ ...s, tables }));
+        const [tables, wait] = await Promise.all([fetchTables(), fetchWaitlist()]);
+        setState(s => ({ ...s, tables, ...wait }));
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'sessions' }, async () => {
         const sessions = await fetchSessions();
@@ -268,9 +332,15 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         setState(s => ({ ...s, reservations }));
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'waitlist' }, async () => {
-        const waitlist = await fetchWaitlist();
-        setState(s => ({ ...s, waitlist }));
+        const wait = await fetchWaitlist();
+        setState(s => ({ ...s, ...wait }));
       })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'table_borrows' }, refreshExtras)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'block_bookings' }, refreshExtras)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'lost_items' }, refreshExtras)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'announcements' }, refreshExtras)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'notifications' }, refreshExtras)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'app_policy' }, refreshExtras)
       .subscribe();
 
     channelRef.current = ch;
@@ -279,7 +349,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       supabase.removeChannel(ch);
       channelRef.current = null;
     };
-  }, [ready, fetchTables, fetchSessions, fetchReservations, fetchWaitlist]);
+  }, [ready, fetchTables, fetchSessions, fetchReservations, fetchWaitlist, fetchExtras]);
 
   // ─── Foreground refresh ───
 
@@ -291,68 +361,55 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   }, [ready, refreshAll]);
 
   // ─── Actions ───
+  // Times sent to the server are ignored there (it applies the admin's rules);
+  // they are kept so older database versions still work.
+
+  const call = useCallback(async (fn: string, args?: Record<string, any>) => {
+    const { data, error } = await supabase.rpc(fn, args);
+    if (error) throw error;
+    await refreshAll();
+    return data;
+  }, [refreshAll]);
 
   const reserve = useCallback(async (tableId: string, expiresAt: string) => {
-    const { error } = await supabase.rpc('reserve_table', {
+    await call('reserve_table', {
       p_table_id: tableId,
       p_reservation_id: newId('res'),
       p_expires_at: expiresAt,
     });
-    if (error) throw error;
-    await refreshAll();
-  }, [refreshAll]);
+  }, [call]);
 
   const cancelReservation = useCallback(async (reservationId: string) => {
-    const { error } = await supabase.rpc('cancel_reservation', {
-      p_reservation_id: reservationId,
-    });
-    if (error) throw error;
-    await refreshAll();
-  }, [refreshAll]);
+    await call('cancel_reservation', { p_reservation_id: reservationId });
+  }, [call]);
 
   const scanToStart = useCallback(async (reservationId: string, endsAt: string) => {
-    const { error } = await supabase.rpc('scan_to_start', {
+    await call('scan_to_start', {
       p_reservation_id: reservationId,
       p_session_id: newId('session'),
       p_ends_at: endsAt,
     });
-    if (error) throw error;
-    await refreshAll();
-  }, [refreshAll]);
+  }, [call]);
 
   const checkInDirect = useCallback(async (tableId: string, endsAt: string) => {
-    const { error } = await supabase.rpc('check_in_direct', {
+    await call('check_in_direct', {
       p_table_id: tableId,
       p_session_id: newId('session'),
       p_ends_at: endsAt,
     });
-    if (error) throw error;
-    await refreshAll();
-  }, [refreshAll]);
+  }, [call]);
 
   const endSession = useCallback(async (sessionId: string, reason: 'completed' | 'expired') => {
-    const { error } = await supabase.rpc('end_session', {
-      p_session_id: sessionId,
-      p_reason: reason,
-    });
-    if (error) throw error;
-    await refreshAll();
-  }, [refreshAll]);
+    await call('end_session', { p_session_id: sessionId, p_reason: reason });
+  }, [call]);
 
   const startBreak = useCallback(async (sessionId: string) => {
-    const { error } = await supabase.rpc('start_break', {
-      p_session_id: sessionId,
-      p_break_duration_minutes: 15,
-    });
-    if (error) throw error;
-    await refreshAll();
-  }, [refreshAll]);
+    await call('start_break', { p_session_id: sessionId, p_break_duration_minutes: 15 });
+  }, [call]);
 
   const endBreak = useCallback(async (sessionId: string) => {
-    const { error } = await supabase.rpc('end_break', { p_session_id: sessionId });
-    if (error) throw error;
-    await refreshAll();
-  }, [refreshAll]);
+    await call('end_break', { p_session_id: sessionId });
+  }, [call]);
 
   const joinWaitlist = useCallback(async (tableId: string, spaceId: string) => {
     const { data: { user } } = await supabase.auth.getUser();
@@ -384,6 +441,32 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     await refreshAll();
   }, [refreshAll]);
 
+  const borrowTable = useCallback(async (tableId: string) => {
+    await call('borrow_table', { p_table_id: tableId });
+  }, [call]);
+
+  const endBorrow = useCallback(async () => {
+    await call('end_borrow');
+  }, [call]);
+
+  const reportTable = useCallback(async (tableId: string, kind: ReportKind, note?: string) => {
+    await call('report_table', { p_table_id: tableId, p_kind: kind, p_note: note ?? null });
+  }, [call]);
+
+  const markNotificationsRead = useCallback(async () => {
+    const { error } = await supabase.rpc('mark_notifications_read');
+    if (error) throw error;
+    setState(s => ({
+      ...s,
+      notifications: s.notifications.map(n => (n.read_at ? n : { ...n, read_at: new Date().toISOString() })),
+      myStatus: s.myStatus ? { ...s.myStatus, unread: 0 } : s.myStatus,
+    }));
+  }, []);
+
+  const adminCall = useCallback(async (fn: string, args?: Record<string, any>) => {
+    return call(fn, args);
+  }, [call]) as StoreValue['adminCall'];
+
   return (
     <StoreContext.Provider value={{
       state, ready, refreshAll,
@@ -391,6 +474,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       reserve, cancelReservation, scanToStart, checkInDirect,
       endSession, startBreak, endBreak,
       joinWaitlist, leaveWaitlist, setHostel,
+      borrowTable, endBorrow, reportTable, markNotificationsRead, adminCall,
     }}>
       {children}
     </StoreContext.Provider>

@@ -1,18 +1,21 @@
 import React, { useEffect, useState } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useStore } from '../state/store';
-import { myActiveSession } from '../state/selectors';
+import { myActiveSession, myBorrow, sessionSeconds, breakSeconds } from '../state/selectors';
 import { DotRing } from '../components/DotRing';
 import { Button } from '../components/Button';
 import { theme } from '../constants/theme';
 import { sessionSecondsLeft } from '../logic/sessions';
 import { formatTime, formatClock, secondsUntil } from '../utils/time';
-import { SESSION_SECONDS, LOW_TIME_THRESHOLD } from '../constants/policy';
+import { LOW_TIME_THRESHOLD } from '../constants/policy';
 
 interface Props {
   onStartBreak: () => void;
   onEndBreak: () => void;
   onEndSession: () => void;
+  onEndBorrow: () => void;
+  onShowProof: () => void;
+  onReport: (tableId: string) => void;
   breakBudgetRemaining: number | null;
 }
 
@@ -20,16 +23,60 @@ export function SessionScreen({
   onStartBreak,
   onEndBreak,
   onEndSession,
+  onEndBorrow,
+  onShowProof,
+  onReport,
   breakBudgetRemaining,
 }: Props) {
   const { state } = useStore();
   const session = myActiveSession(state);
+  const borrow = myBorrow(state);
   const [, force] = useState(0);
 
   useEffect(() => {
     const t = setInterval(() => force(x => x + 1), 1000);
     return () => clearInterval(t);
   }, []);
+
+  // 16 · using someone's away table
+  if (!session && borrow) {
+    const owner = state.sessions.find(s => s.id === borrow.owner_session_id);
+    const table = state.tables.find(t => t.id === borrow.table_id);
+    const backBy = owner?.break_ends_at ?? null;
+    const total = breakSeconds(state.policy);
+    const left = backBy ? secondsUntil(backBy) : 0;
+    return (
+      <ScrollView contentContainerStyle={styles.container}>
+        <View style={styles.timeRange}>
+          <View style={styles.timeCol}>
+            <Text style={styles.timeLabel}>Using</Text>
+            <Text style={styles.timeValue}>{table?.label ?? '—'}</Text>
+          </View>
+          <Text style={styles.arrow}>·</Text>
+          <View style={styles.timeCol}>
+            <Text style={styles.timeLabel}>Owner back by</Text>
+            <Text style={styles.timeValue}>{backBy ? formatClock(new Date(backBy)) : '—'}</Text>
+          </View>
+        </View>
+
+        <View style={styles.ringWrap}>
+          <DotRing remainingFraction={Math.min(1, left / Math.max(1, total))} mode="break">
+            <Text style={styles.big}>{formatTime(left)}</Text>
+            <Text style={styles.small}>UNTIL OWNER RETURNS</Text>
+          </DotRing>
+        </View>
+
+        <Text style={styles.explain}>
+          If the owner doesn't come back by then, the table becomes yours for a full session. If they return, please
+          free the table.
+        </Text>
+
+        <View style={styles.actions}>
+          <Button label="I'M DONE · FREE TABLE" variant="ghost" onPress={onEndBorrow} />
+        </View>
+      </ScrollView>
+    );
+  }
 
   if (!session) {
     return (
@@ -61,7 +108,7 @@ export function SessionScreen({
     centerSmall = 'Break Remaining';
   } else {
     const left = sessionSecondsLeft(session);
-    remainingFraction = Math.min(1, left / SESSION_SECONDS);
+    remainingFraction = Math.min(1, left / Math.max(left, sessionSeconds(state.policy)));
     low = left <= LOW_TIME_THRESHOLD;
     centerBig = formatTime(left);
   }
@@ -72,12 +119,14 @@ export function SessionScreen({
   const breakMinutesLabel =
     breakBudgetRemaining !== null
       ? Math.ceil(breakBudgetRemaining / 60)
-      : 15;
+      : Math.round(breakSeconds(state.policy) / 60);
 
   const breakHint =
     breakBudgetRemaining !== null
       ? `${formatTime(breakBudgetRemaining)} LEFT`
-      : '+ 15M PAUSE';
+      : `+ ${Math.round(breakSeconds(state.policy) / 60)}M PAUSE`;
+
+  const borrowedNow = state.borrows.some(b => b.owner_session_id === session.id && b.status === 'active');
 
   return (
     <ScrollView contentContainerStyle={styles.container}>
@@ -99,6 +148,14 @@ export function SessionScreen({
           <Text style={styles.small}>{centerSmall.toUpperCase()}</Text>
         </DotRing>
       </View>
+
+      {mode === 'break' && (
+        <Text style={styles.explain}>
+          {borrowedNow
+            ? 'Someone is using your table until you return. Tap "I\'m back" when you arrive and they\'ll be asked to leave.'
+            : 'If you don\'t return before the timer ends, your session ends and the table goes to the next person.'}
+        </Text>
+      )}
 
       <View style={styles.actions}>
         {mode === 'session' && hasBreakBudget && (
@@ -123,11 +180,13 @@ export function SessionScreen({
             onPress={onEndBreak}
           />
         )}
+        <Button label="SHOW PROOF" variant="secondary" onPress={onShowProof} />
         <Button
           label="END SESSION"
           variant="ghost"
           onPress={onEndSession}
         />
+        <Button label="Report a problem" variant="ghost" onPress={() => onReport(session.table_id)} />
       </View>
     </ScrollView>
   );
@@ -174,6 +233,15 @@ const styles = StyleSheet.create({
     color: theme.colors.textDim,
     letterSpacing: 3,
     marginTop: 12,
+  },
+  explain: {
+    fontFamily: theme.fonts.sans,
+    fontSize: 12,
+    color: theme.colors.textDim,
+    textAlign: 'center',
+    lineHeight: 18,
+    marginTop: 20,
+    paddingHorizontal: 8,
   },
   actions: { width: '100%', marginTop: 32, gap: 12 },
   empty: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 40 },

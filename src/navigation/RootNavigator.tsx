@@ -10,16 +10,24 @@ import {
   myReservation,
   queueLength,
   queuePosition,
+  myBorrow,
+  borrowForTable,
+  activeBlockForTable,
+  nextBlockForTable,
+  sessionForTable,
+  breakSeconds,
+  holdSeconds,
+  sessionSeconds,
+  lostItemsAtTable,
+  unreadCount,
 } from '../state/selectors';
 import { findSpace, SPACES } from '../constants/spaces';
-import {
-  BREAK_MINUTES,
-  RESERVATION_SECONDS,
-  SESSION_SECONDS,
-} from '../constants/policy';
+import { RESERVATION_SECONDS, SESSION_SECONDS } from '../constants/policy';
+import { friendlyError } from '../utils/errors';
+import { setReminders, Reminder } from '../lib/push';
 import { theme } from '../constants/theme';
 import { goToTab, goToHome } from './navRef';
-import { formatTime, secondsUntil } from '../utils/time';
+import { formatClock, formatTime, secondsUntil } from '../utils/time';
 
 // Screens
 import { HomeScreen } from '../screens/HomeScreen';
@@ -37,6 +45,9 @@ import { ConfirmDialog, ConfirmConfig } from '../components/ConfirmDialog';
 import { AccountMenu } from '../components/AccountMenu';
 import { PickerSheet } from '../components/PickerSheet';
 import { useToast } from '../components/Toast';
+import { ProofSheet } from '../components/ProofSheet';
+import { NotificationsSheet } from '../components/NotificationsSheet';
+import { ReportKind } from '../state/store';
 import { Profile } from '../types';
 import { supabase } from '../lib/supabase';
 
@@ -50,6 +61,10 @@ export function RootNavigator() {
 
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const [hostelPickerOpen, setHostelPickerOpen] = useState(false);
+  const [proofOpen, setProofOpen] = useState(false);
+  const [notesOpen, setNotesOpen] = useState(false);
+  const [tableMenuFor, setTableMenuFor] = useState<string | null>(null);
+  const [reportFor, setReportFor] = useState<string | null>(null);
 
   const [confirmCfg, setConfirmCfg] = useState<ConfirmConfig | null>(null);
   const [confirmResolve, setConfirmResolve] = useState<((v: boolean) => void) | null>(null);
@@ -74,7 +89,7 @@ export function RootNavigator() {
   }, [confirmResolve]);
 
   const profile = state.profile!;
-  const hasSession = !!myActiveSession(state);
+  const hasSession = !!myActiveSession(state) || !!myBorrow(state);
   const myRes = myReservation(state);
   const waitCount = myWaitlist(state).length;
   const admin = isAdmin(state);
@@ -95,7 +110,7 @@ export function RootNavigator() {
       for (const s of expiredActive) {
         try {
           await store.endSession(s.id, 'expired');
-          toast.show('60 minutes up · Session ended', 'warning');
+          toast.show('Time up · Session ended · Collect your belongings', 'warning');
         } catch (e) {
           console.warn('[tick] endSession (active) failed:', e);
         }
@@ -111,7 +126,7 @@ export function RootNavigator() {
       for (const s of expiredBreak) {
         try {
           await store.endSession(s.id, 'expired');
-          toast.show('Break over · Session ended', 'warning');
+          toast.show('Break over · Session ended · Collect your belongings', 'warning');
         } catch (e) {
           console.warn('[tick] endSession (break) failed:', e);
         }
@@ -120,12 +135,10 @@ export function RootNavigator() {
       const expiredRes = state.reservations.filter(
         r => r.user_id === myId && new Date(r.expires_at).getTime() <= now
       );
-      for (const r of expiredRes) {
-        try {
-          await store.cancelReservation(r.id);
-        } catch (e) {
-          console.warn('[tick] cancelReservation failed:', e);
-        }
+      // The server releases expired reservations (and records missed ones);
+      // here we only refresh so the screen catches up.
+      if (expiredRes.length > 0) {
+        store.refreshAll().catch(() => {});
       }
     }, 1000);
 
@@ -137,9 +150,36 @@ export function RootNavigator() {
     const s = myActiveSession(state);
     if (!s) return null;
     const used = s.break_seconds_used ?? 0;
-    const total = BREAK_MINUTES * 60;
+    const total = breakSeconds(state.policy);
     return Math.max(0, total - used);
   })();
+
+  // ─── Local reminders (fire even with the app closed) ───
+  const reminderKey = (() => {
+    const s = myActiveSession(state);
+    const r = myReservation(state);
+    const b = myBorrow(state);
+    return [s?.id, s?.status, s?.ends_at, s?.break_ends_at, r?.id, r?.expires_at, b?.id].join('|');
+  })();
+  useEffect(() => {
+    const s = myActiveSession(state);
+    const r = myReservation(state);
+    const list: Reminder[] = [];
+    const at = (iso: string, minusSec: number) => new Date(new Date(iso).getTime() - minusSec * 1000);
+    if (s?.status === 'active') {
+      list.push({ at: at(s.ends_at, 15 * 60), title: '15 minutes left', body: 'Your study session ends soon.' });
+      list.push({ at: at(s.ends_at, 60), title: '1 minute left', body: 'Your session is about to end. Collect your belongings.' });
+    }
+    if (s?.status === 'on_break' && s.break_ends_at) {
+      list.push({ at: at(s.break_ends_at, 3 * 60), title: 'Break ends in 3 minutes', body: "Head back and tap \"I'm back\" or the table is released." });
+      list.push({ at: at(s.break_ends_at, 60), title: 'Break ends in 1 minute', body: 'Your table will be released if you are not back.' });
+    }
+    if (r) {
+      list.push({ at: at(r.expires_at, 60), title: '1 minute to scan', body: 'Scan the table QR or your reservation is released.' });
+    }
+    setReminders(list);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reminderKey]);
 
   // ─── Action wrappers ───
 
@@ -153,7 +193,7 @@ export function RootNavigator() {
         toast.show(`Checked in · ${table.label}`, 'success');
         goToTab('Session');
       } catch (e: any) {
-        toast.show(e?.message ?? 'Check-in failed', 'error');
+        toast.show(friendlyError(e, 'Check-in failed'), 'error');
       }
     },
     [state.tables, store, toast]
@@ -170,7 +210,7 @@ export function RootNavigator() {
         toast.show(`Checked in · ${table?.label}`, 'success');
         goToTab('Session');
       } catch (e: any) {
-        toast.show(e?.message ?? 'Check-in failed', 'error');
+        toast.show(friendlyError(e, 'Check-in failed'), 'error');
       }
     },
     [state.reservations, state.tables, store, toast]
@@ -186,7 +226,7 @@ export function RootNavigator() {
         toast.show(`Reserved · ${table.label} — scan to start`, 'info');
         goToTab('Scan');
       } catch (e: any) {
-        toast.show(e?.message ?? 'Reserve failed', 'error');
+        toast.show(friendlyError(e, 'Reserve failed'), 'error');
       }
     },
     [state.tables, store, toast]
@@ -198,7 +238,7 @@ export function RootNavigator() {
         await store.cancelReservation(reservationId);
         toast.show('Reservation cancelled', 'info');
       } catch (e: any) {
-        toast.show(e?.message ?? 'Cancel failed', 'error');
+        toast.show(friendlyError(e, 'Cancel failed'), 'error');
       }
     },
     [store, toast]
@@ -211,12 +251,7 @@ export function RootNavigator() {
       await store.startBreak(s.id);
       toast.show(`Break started`, 'warning');
     } catch (e: any) {
-      const msg = e?.message ?? 'Break failed';
-      if (msg.includes('no_break_time_left')) {
-        toast.show('No break time remaining', 'error');
-      } else {
-        toast.show(msg, 'error');
-      }
+      toast.show(friendlyError(e, 'Break failed'), 'error');
     }
   }, [state, store, toast]);
 
@@ -227,7 +262,7 @@ export function RootNavigator() {
       await store.endBreak(s.id);
       toast.show('Session resumed', 'success');
     } catch (e: any) {
-      toast.show(e?.message ?? 'Resume failed', 'error');
+      toast.show(friendlyError(e, 'Resume failed'), 'error');
     }
   }, [state, store, toast]);
 
@@ -244,9 +279,9 @@ export function RootNavigator() {
     if (!ok) return;
     try {
       await store.endSession(s.id, 'completed');
-      toast.show('Session ended · Table released', 'info');
+      toast.show('Session ended · Collect your belongings', 'info');
     } catch (e: any) {
-      toast.show(e?.message ?? 'End failed', 'error');
+      toast.show(friendlyError(e, 'End failed'), 'error');
     }
   }, [state, confirm, store, toast]);
 
@@ -258,7 +293,7 @@ export function RootNavigator() {
         await store.joinWaitlist(tableId, table.space_id);
         toast.show(`Added to queue · ${table.label}`, 'success');
       } catch (e: any) {
-        toast.show(e?.message ?? 'Queue failed', 'error');
+        toast.show(friendlyError(e, 'Queue failed'), 'error');
       }
     },
     [state.tables, store, toast]
@@ -270,7 +305,7 @@ export function RootNavigator() {
         await store.leaveWaitlist(entryId);
         toast.show('Left waitlist', 'info');
       } catch (e: any) {
-        toast.show(e?.message ?? 'Leave failed', 'error');
+        toast.show(friendlyError(e, 'Leave failed'), 'error');
       }
     },
     [store, toast]
@@ -284,8 +319,30 @@ export function RootNavigator() {
 
       const mine = myActiveSession(state);
       const myR = myReservation(state);
+      const myB = myBorrow(state);
 
       if (mine && mine.table_id === tableId) { goToTab('Session'); return; }
+      if (myB && myB.table_id === tableId) { goToTab('Session'); return; }
+      if (myB) {
+        toast.show('You are using another table right now', 'error');
+        goToTab('Session');
+        return;
+      }
+
+      if (table.status === 'blocked') {
+        const blk = activeBlockForTable(state, tableId);
+        toast.show(
+          blk ? `${blk.title} · booked until ${formatClock(new Date(blk.ends_at))}` : 'This table is booked',
+          'warning'
+        );
+        return;
+      }
+      if (table.status === 'on_break' || table.status === 'occupied') {
+        // occupied / away: queue (occupied only), report a problem, or how to use it while the owner is away
+        setTableMenuFor(tableId);
+        return;
+      }
+
       if (mine) {
         toast.show('You already have an active session', 'error');
         goToTab('Session');
@@ -319,9 +376,16 @@ export function RootNavigator() {
 
       if (table.status === 'available') {
         const space = findSpace(table.space_id);
+        const items = lostItemsAtTable(state, tableId);
+        const nextBlk = nextBlockForTable(state, tableId);
+        const extra =
+          (items.length ? `\n\nNote: ${items.map(i => i.description).join(', ')} was left at this table.` : '') +
+          (nextBlk && new Date(nextBlk.starts_at).getTime() - Date.now() < sessionSeconds(state.policy) * 1000
+            ? `\n\nBooked for ${nextBlk.title} from ${formatClock(new Date(nextBlk.starts_at))}, so your session ends then.`
+            : '');
         const ok = await confirm({
           title: 'Reserve Table',
-          message: `Reserve Table ${table.label} in ${space?.name}? You'll have ${RESERVATION_SECONDS / 60} minutes to scan the QR and start your session.`,
+          message: `Reserve Table ${table.label} in ${space?.name}? You'll have ${Math.round(holdSeconds(state.policy) / 60)} minutes to scan the QR and start your session.${extra}`,
           confirmText: 'Reserve',
           cancelText: 'Cancel',
         });
@@ -334,11 +398,15 @@ export function RootNavigator() {
         return;
       }
 
-      if (table.status === 'on_break') {
-        toast.show('Owner is on break — table may free up soon', 'warning');
-        return;
-      }
+    },
+    [state, profile.id, confirm, reserve, cancelReservation, toast]
+  );
 
+  // Join the queue for an occupied table (from the table menu)
+  const askJoinWaitlist = useCallback(
+    async (tableId: string) => {
+      const table = state.tables.find(t => t.id === tableId);
+      if (!table) return;
       const existing = state.waitlist.find(
         w => w.table_id === tableId && w.user_id === profile.id && w.status === 'waiting'
       );
@@ -353,22 +421,83 @@ export function RootNavigator() {
         if (ok) goToTab('Wait');
         return;
       }
-
       const len = queueLength(state, tableId);
       const space = findSpace(table.space_id);
+      const sess = sessionForTable(state, tableId);
+      const freeLine = sess?.status === 'active' ? ` Free by ${formatClock(new Date(sess.ends_at))}.` : '';
       const queueLine =
         len > 0
           ? ` ${len} ${len === 1 ? 'person is' : 'people are'} already waiting.`
           : ' No one else is waiting yet.';
       const ok = await confirm({
         title: 'Join Waitlist',
-        message: `Table ${table.label} in ${space?.name} is occupied.${queueLine} Join the queue?`,
+        message: `Table ${table.label} in ${space?.name} is occupied.${freeLine}${queueLine} When it frees up it's held for you for ${Math.round(holdSeconds(state.policy) / 60)} minutes. Join the queue?`,
         confirmText: 'Join',
         cancelText: 'Cancel',
       });
       if (ok) await joinWaitlist(tableId);
     },
-    [state, profile.id, confirm, reserve, cancelReservation, joinWaitlist, toast]
+    [state, profile.id, confirm, joinWaitlist]
+  );
+
+  // 16 · use an away table until its owner returns (only by scanning it)
+  const askBorrow = useCallback(
+    async (tableId: string) => {
+      const table = state.tables.find(t => t.id === tableId);
+      const owner = sessionForTable(state, tableId);
+      if (!table || !owner || owner.status !== 'on_break') return;
+      if (borrowForTable(state, tableId)) {
+        toast.show('Someone is already using this table', 'warning');
+        return;
+      }
+      const backBy = owner.break_ends_at ? formatClock(new Date(owner.break_ends_at)) : 'soon';
+      const ok = await confirm({
+        title: 'Use Until Owner Returns',
+        message: `${table.label}'s owner is on a break and must be back by ${backBy}. You can use it until then. If they don't return, it becomes yours for a full session. If they return, please free it.`,
+        confirmText: 'Use Table',
+        cancelText: 'Cancel',
+        accent: 'yellow',
+      });
+      if (!ok) return;
+      try {
+        await store.borrowTable(tableId);
+        toast.show(`Using ${table.label} · until ${backBy}`, 'success');
+        goToTab('Session');
+      } catch (e: any) {
+        toast.show(friendlyError(e, 'Could not use table'), 'error');
+      }
+    },
+    [state, confirm, store, toast]
+  );
+
+  const endBorrow = useCallback(async () => {
+    const ok = await confirm({
+      title: 'Free This Table',
+      message: 'Stop using this table? Please take your belongings with you.',
+      confirmText: 'Free Table',
+      cancelText: 'Cancel',
+    });
+    if (!ok) return;
+    try {
+      await store.endBorrow();
+      toast.show('Table freed · Collect your belongings', 'info');
+    } catch (e: any) {
+      toast.show(friendlyError(e, 'Failed'), 'error');
+    }
+  }, [confirm, store, toast]);
+
+  // 18 · report a problem at a table
+  const submitReport = useCallback(
+    async (tableId: string, kind: ReportKind) => {
+      setReportFor(null);
+      try {
+        await store.reportTable(tableId, kind);
+        toast.show('Report sent to the admin', 'success');
+      } catch (e: any) {
+        toast.show(friendlyError(e, 'Report failed'), 'error');
+      }
+    },
+    [store, toast]
   );
 
   // ─── Scan handler ───
@@ -382,6 +511,7 @@ export function RootNavigator() {
 
       const mine = myActiveSession(state);
       const myR = myReservation(state);
+      const myB = myBorrow(state);
       const otherRes = state.reservations.find(
         r => r.table_id === table.id && r.user_id !== profile.id
       );
@@ -391,6 +521,18 @@ export function RootNavigator() {
         toast.show('You already have an active session', 'error');
         goToTab('Session');
         return true;
+      }
+
+      if (myB) {
+        if (myB.table_id === table.id) { goToTab('Session'); return true; }
+        toast.show('You are using another table right now', 'error');
+        goToTab('Session');
+        return true;
+      }
+
+      if (table.status === 'blocked') {
+        handleTablePress(table.id);
+        return false;
       }
 
       if (otherRes) {
@@ -420,13 +562,13 @@ export function RootNavigator() {
       }
 
       if (table.status === 'on_break') {
-        toast.show('Owner is on break — table may free up soon', 'warning');
+        askBorrow(table.id);
         return true;
       }
 
       return false;
     },
-    [state, profile.id, toast, scanToStart, startSession, handleTablePress]
+    [state, profile.id, toast, scanToStart, startSession, handleTablePress, askBorrow]
   );
 
   // ─── UI handlers ───
@@ -440,7 +582,7 @@ export function RootNavigator() {
         await store.setHostel(spaceId);
         toast.show(`Home set · ${findSpace(spaceId)?.name}`, 'success');
       } catch (e: any) {
-        toast.show(e?.message ?? 'Update failed', 'error');
+        toast.show(friendlyError(e, 'Update failed'), 'error');
       }
     },
     [store, toast]
@@ -466,7 +608,7 @@ export function RootNavigator() {
       await store.refreshAll();
       toast.show('All tables reset', 'info');
     } catch (e: any) {
-      toast.show(e?.message ?? 'Reset failed', 'error');
+      toast.show(friendlyError(e, 'Reset failed'), 'error');
     }
   }, [confirm, store, toast]);
 
@@ -482,6 +624,11 @@ export function RootNavigator() {
 
   const sessionSubtitle = (() => {
     const s = myActiveSession(state);
+    const b = myBorrow(state);
+    if (!s && b) {
+      const t = state.tables.find(x => x.id === b.table_id);
+      return `${findSpace(b.space_id)?.name} · ${t?.label} · until owner returns`;
+    }
     if (!s) return 'Track your study time';
     const table = state.tables.find(t => t.id === s.table_id);
     const space = findSpace(s.space_id);
@@ -585,6 +732,9 @@ export function RootNavigator() {
                 onStartBreak={startBreak}
                 onEndBreak={endBreak}
                 onEndSession={endSession}
+                onEndBorrow={endBorrow}
+                onShowProof={() => setProofOpen(true)}
+                onReport={id => setReportFor(id)}
                 breakBudgetRemaining={breakBudgetRemaining}
               />
             </>
@@ -624,10 +774,21 @@ export function RootNavigator() {
         subtitle={`@${profile.username} · ${profile.display_name}`}
         items={[
           {
-            label: 'Change hostel',
+            label: `Notifications${unreadCount(state) ? ` (${unreadCount(state)} new)` : ''}`,
+            onSelect: () => {
+              setAccountMenuOpen(false);
+              setTimeout(() => setNotesOpen(true), 200);
+            },
+          },
+          {
+            label: state.myStatus?.roster_active ? 'My hostel' : 'Change hostel',
             hint: myHostelId(state) ? findSpace(myHostelId(state)!)?.name : 'Not set',
             onSelect: () => {
               setAccountMenuOpen(false);
+              if (state.myStatus?.roster_active) {
+                toast.show("Your hostel comes from the warden's resident list", 'info');
+                return;
+              }
               setTimeout(() => setHostelPickerOpen(true), 200);
             },
           },
@@ -654,6 +815,89 @@ export function RootNavigator() {
         }))}
         onSelect={handlePickHostel}
         onCancel={() => setHostelPickerOpen(false)}
+      />
+
+      {/* Table menu for occupied / away tables */}
+      {(() => {
+        const t = tableMenuFor ? state.tables.find(x => x.id === tableMenuFor) : undefined;
+        const sess = t ? sessionForTable(state, t.id) : undefined;
+        const sub =
+          t?.status === 'on_break' && sess?.break_ends_at
+            ? `Owner away · back by ${formatClock(new Date(sess.break_ends_at))}`
+            : sess
+            ? `Occupied · free by ${formatClock(new Date(sess.ends_at))}`
+            : '';
+        const items = [
+          ...(t?.status === 'occupied'
+            ? [{
+                label: `Join waitlist${queueLength(state, t.id) ? ` · ${queueLength(state, t.id)} waiting` : ''}`,
+                onSelect: () => { const id = t.id; setTableMenuFor(null); setTimeout(() => askJoinWaitlist(id), 200); },
+              }]
+            : []),
+          ...(t?.status === 'on_break'
+            ? [{
+                label: 'Use until owner returns',
+                hint: 'Scan its QR',
+                onSelect: () => { setTableMenuFor(null); toast.show("Scan the table's QR to use it", 'info'); goToTab('Scan'); },
+              }]
+            : []),
+          {
+            label: 'Report a problem',
+            onSelect: () => { const id = t?.id ?? null; setTableMenuFor(null); setTimeout(() => setReportFor(id), 200); },
+          },
+          { label: 'Close', onSelect: () => setTableMenuFor(null) },
+        ];
+        return (
+          <AccountMenu
+            visible={!!t}
+            title={t ? `Table ${t.label}` : ''}
+            subtitle={sub}
+            items={items}
+            onCancel={() => setTableMenuFor(null)}
+          />
+        );
+      })()}
+
+      <PickerSheet
+        visible={!!reportFor}
+        title="Report a problem"
+        message={`Table ${state.tables.find(t => t.id === reportFor)?.label ?? ''} · the admin sees this with the time and who held the table.`}
+        items={[
+          { id: 'sitting_without_scanning', label: 'Someone is sitting without scanning' },
+          { id: 'asked_to_leave', label: 'I was asked to leave my booked table' },
+          { id: 'belongings_left', label: 'Belongings left here' },
+          { id: 'damaged', label: 'Table or chair is damaged' },
+          { id: 'other', label: 'Something else' },
+        ]}
+        onSelect={kind => reportFor && submitReport(reportFor, kind as ReportKind)}
+        onCancel={() => setReportFor(null)}
+      />
+
+      {(() => {
+        const s = myActiveSession(state);
+        const t = s ? state.tables.find(x => x.id === s.table_id) : undefined;
+        return s && t ? (
+          <ProofSheet
+            visible={proofOpen}
+            name={profile.display_name}
+            username={profile.username}
+            tableLabel={t.label}
+            spaceName={findSpace(t.space_id)?.name ?? ''}
+            startedAt={s.started_at}
+            endsAt={s.ends_at}
+            onBreak={s.status === 'on_break'}
+            onClose={() => setProofOpen(false)}
+          />
+        ) : null;
+      })()}
+
+      <NotificationsSheet
+        visible={notesOpen}
+        items={state.notifications}
+        onClose={() => {
+          setNotesOpen(false);
+          store.markNotificationsRead().catch(() => {});
+        }}
       />
 
       <ConfirmDialog

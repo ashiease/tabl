@@ -8,7 +8,7 @@ const SIZE = 280;
 const CENTER = SIZE / 2;
 const RADIUS = 118;
 
-type Mode = 'session' | 'break' | 'grace';
+type Mode = 'session' | 'break';
 
 interface Props {
   remainingFraction: number; // 1 = full, 0 = empty
@@ -30,7 +30,6 @@ export function DotRing({
 
   const litColor =
     mode === 'break' ? theme.colors.yellow
-    : mode === 'grace' ? theme.colors.red
     : low ? theme.colors.yellow
     : theme.colors.green;
 

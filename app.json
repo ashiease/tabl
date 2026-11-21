@@ -42,7 +42,13 @@
           "cameraPermission": "TABL uses your camera to scan table QR codes so you can check in."
         }
       ],
-      "expo-font"
+      "expo-font",
+      [
+        "expo-notifications",
+        {
+          "color": "#22c55e"
+        }
+      ]
     ],
     "extra": {
       "eas": {

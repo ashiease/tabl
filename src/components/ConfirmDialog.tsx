@@ -95,7 +95,7 @@ const styles = StyleSheet.create({
     height: 2,
   },
   title: {
-    fontFamily: theme.fonts.dot,
+    fontFamily: theme.fonts.display,
     fontSize: 18,
     color: theme.colors.text,
     marginBottom: 12,

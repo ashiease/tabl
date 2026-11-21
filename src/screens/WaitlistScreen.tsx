@@ -1,10 +1,11 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useStore } from '../state/store';
 import { myWaitlist, queuePosition } from '../state/selectors';
 import { findSpace } from '../constants/spaces';
 import { theme } from '../constants/theme';
 import { Button } from '../components/Button';
+import { formatTime, secondsUntil } from '../utils/time';
 
 interface Props {
   onLeave: (entryId: string) => void;
@@ -13,6 +14,11 @@ interface Props {
 export function WaitlistScreen({ onLeave }: Props) {
   const { state } = useStore();
   const mine = myWaitlist(state);
+  const [, force] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => force(x => x + 1), 1000);
+    return () => clearInterval(t);
+  }, []);
 
   if (mine.length === 0) {
     return (
@@ -39,6 +45,7 @@ export function WaitlistScreen({ onLeave }: Props) {
         const space = findSpace(entry.space_id);
         const pos = queuePosition(state, entry.id);
         if (!table || !space) return null;
+        const hold = state.reservations.find(r => r.table_id === entry.table_id && r.user_id === state.profile?.id);
 
         return (
           <View key={entry.id} style={styles.entryWrap}>
@@ -48,7 +55,9 @@ export function WaitlistScreen({ onLeave }: Props) {
                   {table.label} · {space.name}
                 </Text>
                 <Text style={styles.entryStatus}>
-                  {entry.notified ? 'Ready · head over' : 'Waiting'}
+                  {entry.notified
+                    ? hold ? `Ready · scan within ${formatTime(secondsUntil(hold.expires_at))}` : 'Ready · head over'
+                    : pos > 1 ? `Waiting · ${pos - 1} ahead of you` : 'Waiting · you are next'}
                 </Text>
               </View>
               <View
@@ -117,7 +126,7 @@ const styles = StyleSheet.create({
   },
   entryLeft: { flex: 1 },
   entryLabel: {
-    fontFamily: theme.fonts.dot,
+    fontFamily: theme.fonts.display,
     fontSize: 16,
     color: theme.colors.text,
   },

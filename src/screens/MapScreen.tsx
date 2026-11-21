@@ -5,10 +5,15 @@ import {
   sessionForTable,
   reservationForTable,
   tablesInSpace,
+  borrowForTable,
+  activeBlockForTable,
+  lostItemsAtTable,
+  queueLength,
 } from '../state/selectors';
 import { findSpace } from '../constants/spaces';
 import { theme } from '../constants/theme';
 import { TableCard } from '../components/TableCard';
+import { StatusBanners } from '../components/StatusBanners';
 import { secondsUntil } from '../utils/time';
 
 interface Props {
@@ -39,12 +44,18 @@ export function MapScreen({ spaceId, onTablePress }: Props) {
 
   return (
     <ScrollView contentContainerStyle={styles.container}>
+      <StatusBanners spaceId={spaceId} />
+
       <View style={styles.grid}>
         {tables.map(table => {
           const session = sessionForTable(state, table.id);
           const reservation = reservationForTable(state, table.id);
+          const borrow = borrowForTable(state, table.id);
+          const block = table.status === 'blocked' ? activeBlockForTable(state, table.id) : undefined;
 
-          const isMine = !!myId && !!session && session.user_id === myId;
+          const isMine =
+            !!myId &&
+            ((!!session && session.user_id === myId) || (!!borrow && borrow.user_id === myId));
           const isMyReservation =
             !!myId && !!reservation && reservation.user_id === myId;
 
@@ -61,9 +72,16 @@ export function MapScreen({ spaceId, onTablePress }: Props) {
             <View key={table.id} style={styles.gridItem}>
               <TableCard
                 table={table}
-                isMine={!!isMine || !!isMyReservation}
+                isMine={isMine || isMyReservation}
                 breakRemainingSec={breakRemainingSec}
                 reserveRemainingSec={reserveRemainingSec}
+                freeAt={session?.status === 'active' ? session.ends_at : null}
+                backBy={session?.status === 'on_break' ? session.break_ends_at : null}
+                borrowed={!!borrow}
+                blockTitle={block?.title ?? null}
+                blockUntil={block?.ends_at ?? null}
+                itemsLeft={lostItemsAtTable(state, table.id).length}
+                waiting={queueLength(state, table.id)}
                 onPress={() => onTablePress(table.id)}
               />
             </View>
@@ -76,6 +94,7 @@ export function MapScreen({ spaceId, onTablePress }: Props) {
         <Legend color={theme.colors.blue} label="Reserved" />
         <Legend color={theme.colors.red} label="Occupied" />
         <Legend color={theme.colors.yellow} label="Away" />
+        <Legend color={theme.colors.textDim} label="Booked" />
       </View>
     </ScrollView>
   );

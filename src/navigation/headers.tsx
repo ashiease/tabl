@@ -7,7 +7,7 @@ import { Profile } from '../types';
 interface Props {
   title: string;
   subtitle: string;
-  titleVariant?: 'default' | 'away' | 'grace';
+  titleVariant?: 'default' | 'away';
   profile: Profile;
   onUserPress: () => void;
   showTopAccent?: boolean;
@@ -25,7 +25,6 @@ export function AppHeader({
 
   const titleColor =
     titleVariant === 'away' ? theme.colors.yellow
-    : titleVariant === 'grace' ? theme.colors.red
     : theme.colors.text;
 
   return (

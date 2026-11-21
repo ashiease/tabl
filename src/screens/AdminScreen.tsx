@@ -1,320 +1,368 @@
-import React from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import React, { useCallback, useEffect, useState } from 'react';
+import { RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useStore } from '../state/store';
-import { tablesInSpace } from '../state/selectors';
-import { SPACES } from '../constants/spaces';
+import { tablesInSpace, sessionForTable, borrowForTable, lostItemsAtTable } from '../state/selectors';
+import { SPACES, findSpace } from '../constants/spaces';
 import { theme } from '../constants/theme';
+import { supabase } from '../lib/supabase';
+import { formatClock } from '../utils/time';
+import { friendlyError } from '../utils/errors';
+import { useToast } from '../components/Toast';
 import { Button } from '../components/Button';
+import { AccountMenu, MenuItem } from '../components/AccountMenu';
+import { SectionLabel, Card, Row, Stat, Segments, styles as ui } from './admin/ui';
+import { AdminInbox } from './admin/AdminInbox';
+import { AdminStudents } from './admin/AdminStudents';
+import { AdminManage } from './admin/AdminManage';
+import { AdminLog } from './admin/AdminLog';
 
 interface Props {
   onReset: () => void;
 }
 
+type Tab = 'live' | 'inbox' | 'students' | 'manage' | 'log';
+
+interface Health {
+  checked_at: string;
+  expiry_job?: { schedule?: string; active?: boolean; last_run?: string | null; last_status?: string | null; failures_1h?: number; error?: string };
+  push?: { queued?: number; devices?: number; last_status?: number | null; errors_1h?: number; error?: string };
+  stuck_tables: { table_id: string; label: string; problem: string }[];
+  open_reports: number;
+  suspended_users: number;
+  roster_size: number;
+}
+
+interface Insights {
+  check_ins: number;
+  no_shows: number;
+  break_overruns: number;
+  waitlist_offers: number;
+  waitlist_claimed: number;
+  borrow_converted: number;
+  reports: number;
+  by_hour: number[];
+}
+
 export function AdminScreen({ onReset }: Props) {
-  const { state } = useStore();
+  const [tab, setTab] = useState<Tab>('live');
+  const [openReports, setOpenReports] = useState(0);
+
+  return (
+    <View style={{ flex: 1 }}>
+      <View style={styles.segBar}>
+        <Segments<Tab>
+          value={tab}
+          onChange={setTab}
+          options={[
+            { id: 'live', label: 'Live' },
+            { id: 'inbox', label: 'Inbox', badge: openReports },
+            { id: 'students', label: 'Students' },
+            { id: 'manage', label: 'Manage' },
+            { id: 'log', label: 'Log' },
+          ]}
+        />
+      </View>
+      {tab === 'live' && <AdminLive onOpenReports={setOpenReports} goInbox={() => setTab('inbox')} />}
+      {tab === 'inbox' && <AdminInbox onCount={setOpenReports} />}
+      {tab === 'students' && <AdminStudents />}
+      {tab === 'manage' && <AdminManage onReset={onReset} />}
+      {tab === 'log' && <AdminLog />}
+    </View>
+  );
+}
+
+// ─── Live: occupancy, system health, last 7 days, live tables ───
+function AdminLive({ onOpenReports, goInbox }: { onOpenReports: (n: number) => void; goInbox: () => void }) {
+  const store = useStore();
+  const { state } = store;
+  const toast = useToast();
+  const [health, setHealth] = useState<Health | null>(null);
+  const [insights, setInsights] = useState<Insights | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [menu, setMenu] = useState<{ title: string; subtitle?: string; items: MenuItem[] } | null>(null);
+
+  const load = useCallback(async () => {
+    const [h, i] = await Promise.all([supabase.rpc('admin_health'), supabase.rpc('admin_insights', { p_days: 7 })]);
+    if (h.data) {
+      setHealth(h.data as Health);
+      onOpenReports((h.data as Health).open_reports ?? 0);
+    }
+    if (i.data) setInsights(i.data as Insights);
+  }, [onOpenReports]);
+
+  useEffect(() => {
+    load();
+    const t = setInterval(load, 30000);
+    return () => clearInterval(t);
+  }, [load]);
 
   const total = state.tables.length;
-  const available = state.tables.filter(t => t.status === 'available').length;
-  const reserved = state.tables.filter(t => t.status === 'reserved').length;
-  const occupied = state.tables.filter(t => t.status === 'occupied').length;
-  const onBreak = state.tables.filter(t => t.status === 'on_break').length;
-  const expired = state.sessions.filter(s => s.status === 'expired').length;
-  const completed = state.sessions.filter(s => s.status === 'completed').length;
-  const activeWait = state.waitlist.filter(w => w.status !== 'expired').length;
-  const occupancy = total
-    ? Math.round(((reserved + occupied + onBreak) / total) * 100)
-    : 0;
+  const count = (st: string) => state.tables.filter(t => t.status === st).length;
+  const available = count('available');
+  const reserved = count('reserved');
+  const occupied = count('occupied');
+  const onBreak = count('on_break');
+  const blocked = count('blocked');
+  const inQueue = Object.values(state.waitCounts).reduce((a, b) => a + b, 0);
+  const occupancy = total ? Math.round(((reserved + occupied + onBreak) / Math.max(1, total - blocked)) * 100) : 0;
 
-  const usernameFor = (userId: string) => {
-    const p = state.profiles.find(x => x.id === userId);
-    return p?.username ?? '—';
-  };
+  const usernameFor = (userId?: string | null) =>
+    (userId && state.profiles.find(x => x.id === userId)?.username) || '—';
 
-  // Every table that isn't available — occupied, on break, or reserved.
   const liveTables = state.tables
     .filter(t => t.status !== 'available')
     .map(table => {
-      const session = state.sessions.find(
-        s =>
-          s.table_id === table.id &&
-          (s.status === 'active' ||
-            s.status === 'on_break' ||
-            s.status === 'on_break_expired')
-      );
+      const session = sessionForTable(state, table.id);
       const reservation = state.reservations.find(r => r.table_id === table.id);
-      const ownerId = session?.user_id ?? reservation?.user_id ?? null;
-      const owner = ownerId ? usernameFor(ownerId) : '—';
-      return {
-        label: table.label,
-        space: SPACES.find(s => s.id === table.space_id)?.name ?? table.space_id,
-        status: table.status,
-        owner,
-      };
+      const borrow = borrowForTable(state, table.id);
+      return { table, session, reservation, borrow, owner: usernameFor(session?.user_id ?? reservation?.user_id) };
     })
     .sort((a, b) => {
-      const order: Record<string, number> = { occupied: 0, on_break: 1, reserved: 2 };
-      const oa = order[a.status] ?? 9;
-      const ob = order[b.status] ?? 9;
-      if (oa !== ob) return oa - ob;
-      return a.label.localeCompare(b.label);
+      const order: Record<string, number> = { occupied: 0, on_break: 1, reserved: 2, blocked: 3 };
+      return (order[a.table.status] ?? 9) - (order[b.table.status] ?? 9) || a.table.label.localeCompare(b.table.label);
     });
 
+  const act = async (fn: string, args: Record<string, any>, done: string) => {
+    setMenu(null);
+    try {
+      await store.adminCall(fn, args);
+      toast.show(done, 'success');
+      load();
+    } catch (e: any) {
+      toast.show(friendlyError(e), 'error');
+    }
+  };
+
+  const openTable = (row: (typeof liveTables)[number]) => {
+    const { table, session, reservation } = row;
+    const items: MenuItem[] = [];
+    if (session) {
+      items.push({
+        label: `Release table (end @${row.owner}'s session)`,
+        onSelect: () => act('end_session', { p_session_id: session.id, p_reason: 'completed' }, `${table.label} released`),
+      });
+    }
+    if (reservation) {
+      items.push({
+        label: `Cancel @${row.owner}'s reservation`,
+        onSelect: () => act('cancel_reservation', { p_reservation_id: reservation.id }, `${table.label} released`),
+      });
+    }
+    items.push({
+      label: 'Mark an item left here',
+      onSelect: () => act('admin_add_lost_item', { p_table_id: table.id, p_description: 'Item left at table' }, 'Item noted'),
+    });
+    items.push({ label: 'Close', onSelect: () => setMenu(null) });
+    setMenu({
+      title: `${table.label} · ${findSpace(table.space_id)?.name ?? ''}`,
+      subtitle: session
+        ? `@${row.owner} · ${session.status === 'on_break' ? `away, back by ${formatClock(new Date(session.break_ends_at!))}` : `until ${formatClock(new Date(session.ends_at))}`}`
+        : reservation ? `Reserved by @${row.owner}` : table.status,
+      items,
+    });
+  };
+
+  const job = health?.expiry_job;
+  const jobAgeSec = job?.last_run ? (Date.now() - new Date(job.last_run).getTime()) / 1000 : null;
+  const jobOk = !!job?.active && jobAgeSec != null && jobAgeSec < 120 && job.last_status !== 'failed';
+  const maxHour = Math.max(1, ...(insights?.by_hour ?? [0]));
+
   return (
-    <ScrollView contentContainerStyle={styles.container}>
-      <SectionLabel label="Global" />
+    <ScrollView
+      contentContainerStyle={styles.container}
+      refreshControl={
+        <RefreshControl
+          refreshing={refreshing}
+          tintColor={theme.colors.textDim}
+          onRefresh={async () => {
+            setRefreshing(true);
+            await Promise.all([store.refreshAll(), load()]);
+            setRefreshing(false);
+          }}
+        />
+      }
+    >
+      <SectionLabel label="Right now" />
       <View style={styles.statGrid}>
         <Stat label="Available" value={available} color={theme.colors.green} />
-        <Stat label="Reserved" value={reserved} color={theme.colors.blue} />
         <Stat label="Occupied" value={occupied} color={theme.colors.red} />
         <Stat label="Away" value={onBreak} color={theme.colors.yellow} />
-        <Stat label="In Queue" value={activeWait} />
+        <Stat label="Reserved" value={reserved} color={theme.colors.blue} />
+        <Stat label="In queue" value={inQueue} />
+        <Stat label="Occupancy" value={`${occupancy}%`} hint={blocked ? `${blocked} booked for events` : undefined} />
       </View>
 
-      <SectionLabel label="Metrics" />
-      <View style={styles.infoCard}>
-        <Row k="Occupancy" v={`${occupancy}%`} />
-        <Row k="Total Tables" v={`${total}`} />
-        <Row k="Completed" v={`${completed}`} />
-        <Row k="Expired" v={`${expired}`} valueColor={theme.colors.red} />
-      </View>
+      <SectionLabel label="System health" />
+      <Card>
+        <Row
+          k="Expiry job"
+          v={job?.error ? 'unknown' : jobOk ? `OK · ${Math.round(jobAgeSec!)}s ago` : job?.last_run ? 'Delayed' : 'Not running'}
+          valueColor={jobOk ? theme.colors.green : theme.colors.red}
+        />
+        <Row k="Push" v={`${health?.push?.devices ?? 0} phones · ${health?.push?.queued ?? 0} queued`}
+             valueColor={(health?.push?.errors_1h ?? 0) > 0 ? theme.colors.yellow : undefined} />
+        <Row k="Open reports" v={`${health?.open_reports ?? 0}`} valueColor={(health?.open_reports ?? 0) ? theme.colors.yellow : undefined} />
+        <Row k="Suspended students" v={`${health?.suspended_users ?? 0}`} />
+        <Row
+          k="Stuck tables"
+          v={`${health?.stuck_tables?.length ?? 0}`}
+          valueColor={(health?.stuck_tables?.length ?? 0) ? theme.colors.red : theme.colors.green}
+          last
+        />
+        {(health?.stuck_tables?.length ?? 0) > 0 && (
+          <>
+            {health!.stuck_tables.map(s => (
+              <Text key={s.table_id} style={[ui.smallText, { marginTop: 6 }]}>• {s.label}: {s.problem}</Text>
+            ))}
+            <Button label="Fix stuck tables" variant="warning" style={{ marginTop: 12 }}
+                    onPress={() => act('admin_fix_stuck_tables', {}, 'Tables repaired')} />
+          </>
+        )}
+        {(health?.open_reports ?? 0) > 0 && (
+          <Button label="Open inbox" variant="secondary" style={{ marginTop: 12 }} onPress={goInbox} />
+        )}
+      </Card>
 
-      <SectionLabel label={`Live Tables · ${liveTables.length}`} />
-      {liveTables.length === 0 ? (
-        <View style={styles.infoCard}>
-          <Text style={styles.emptyLive}>All tables available</Text>
-        </View>
-      ) : (
-        <View style={styles.infoCard}>
-          {liveTables.map((row, i) => {
-            const accent =
-              row.status === 'occupied' ? theme.colors.red
-              : row.status === 'on_break' ? theme.colors.yellow
-              : theme.colors.blue;
-            return (
+      <SectionLabel label="Last 7 days" />
+      <View style={styles.statGrid}>
+        <Stat label="Check-ins" value={insights?.check_ins ?? 0} />
+        <Stat label="No-shows" value={insights?.no_shows ?? 0} color={theme.colors.red} />
+        <Stat label="Break overruns" value={insights?.break_overruns ?? 0} color={theme.colors.yellow} />
+        <Stat
+          label="Waitlist"
+          value={`${insights?.waitlist_claimed ?? 0}/${insights?.waitlist_offers ?? 0}`}
+          hint="offers claimed"
+        />
+      </View>
+      <Card style={{ marginTop: 8 }}>
+        <Text style={ui.key}>Check-ins by hour (IST)</Text>
+        <View style={styles.chart}>
+          {(insights?.by_hour ?? Array(24).fill(0)).map((n, h) => (
+            <View key={h} style={styles.barCol}>
               <View
-                key={`${row.label}-${i}`}
                 style={[
-                  styles.liveRow,
-                  i === liveTables.length - 1 && { borderBottomWidth: 0 },
+                  styles.bar,
+                  { height: Math.max(2, (n / maxHour) * 70), backgroundColor: n === maxHour && n > 0 ? theme.colors.green : theme.colors.borderBright },
                 ]}
-              >
+              />
+            </View>
+          ))}
+        </View>
+        <View style={styles.axis}>
+          {['00', '06', '12', '18', '23'].map(h => <Text key={h} style={ui.monoSmall}>{h}</Text>)}
+        </View>
+      </Card>
+
+      <SectionLabel label={`Live tables · ${liveTables.length}`} />
+      <Card>
+        {liveTables.length === 0 ? (
+          <Text style={ui.empty}>All tables available</Text>
+        ) : (
+          liveTables.map((row, i) => {
+            const st = row.table.status;
+            const accent =
+              st === 'occupied' ? theme.colors.red
+              : st === 'on_break' ? theme.colors.yellow
+              : st === 'blocked' ? theme.colors.textDim
+              : theme.colors.blue;
+            const items = lostItemsAtTable(state, row.table.id).length;
+            return (
+              <View key={row.table.id} style={[styles.liveRow, i === liveTables.length - 1 && { borderBottomWidth: 0 }]}>
                 <View style={styles.liveLeft}>
                   <View style={[styles.liveDot, { backgroundColor: accent }]} />
-                  <Text style={styles.liveTable}>{row.label}</Text>
-                  <Text style={styles.liveSpace}>{row.space}</Text>
+                  <Text style={styles.liveTable}>{row.table.label}</Text>
+                  <Text style={styles.liveSpace}>{findSpace(row.table.space_id)?.name}</Text>
+                  {items > 0 && <Text style={[styles.liveSpace, { color: theme.colors.blue }]}>● item</Text>}
                 </View>
-                <View style={styles.liveRight}>
-                  <Text style={styles.liveOwner}>@{row.owner}</Text>
-                  <Text style={[styles.liveStatus, { color: accent }]}>
-                    {row.status === 'on_break' ? 'away' : row.status}
-                  </Text>
-                </View>
+                <Text style={styles.liveOwner} onPress={() => st !== 'blocked' && openTable(row)}>
+                  {st === 'blocked' ? 'event' : `@${row.owner}`}
+                  {row.borrow ? ` +@${usernameFor(row.borrow.user_id)}` : ''}  ›
+                </Text>
               </View>
             );
-          })}
-        </View>
-      )}
+          })
+        )}
+      </Card>
 
-      <SectionLabel label="Per Space" />
-      <View style={styles.infoCard}>
-        <View style={[styles.row, { opacity: 0.6 }]}>
-          <Text style={styles.key}>Legend</Text>
-          <Text style={styles.valueSmall}>
-            <Text style={{ color: theme.colors.green }}>free</Text>
-            <Text style={{ color: theme.colors.textFaint }}> · </Text>
-            <Text style={{ color: theme.colors.blue }}>res</Text>
-            <Text style={{ color: theme.colors.textFaint }}> · </Text>
-            <Text style={{ color: theme.colors.red }}>occ</Text>
-            <Text style={{ color: theme.colors.textFaint }}> · </Text>
-            <Text style={{ color: theme.colors.yellow }}>away</Text>
-          </Text>
+      <SectionLabel label="Per space" />
+      <Card>
+        <View style={[ui.row, { opacity: 0.7 }]}>
+          <Text style={[ui.key, { flex: 1 }]}>Space</Text>
+          <Counts
+            header
+            cells={[
+              { v: 'free', c: theme.colors.green },
+              { v: 'res', c: theme.colors.blue },
+              { v: 'occ', c: theme.colors.red },
+              { v: 'away', c: theme.colors.yellow },
+            ]}
+          />
         </View>
-        {SPACES.map(space => {
+        {SPACES.map((space, i) => {
           const t = tablesInSpace(state, space.id);
-          const a = t.filter(x => x.status === 'available').length;
-          const r = t.filter(x => x.status === 'reserved').length;
-          const o = t.filter(x => x.status === 'occupied').length;
-          const b = t.filter(x => x.status === 'on_break').length;
+          const n = (st: string) => t.filter(x => x.status === st).length;
           return (
-            <View key={space.id} style={styles.row}>
-              <Text style={styles.key}>{space.name}</Text>
-              <Text style={styles.valueSmall}>
-                <Text style={{ color: theme.colors.green }}>{a}</Text>
-                <Text style={{ color: theme.colors.textFaint }}> · </Text>
-                <Text style={{ color: theme.colors.blue }}>{r}</Text>
-                <Text style={{ color: theme.colors.textFaint }}> · </Text>
-                <Text style={{ color: theme.colors.red }}>{o}</Text>
-                <Text style={{ color: theme.colors.textFaint }}> · </Text>
-                <Text style={{ color: theme.colors.yellow }}>{b}</Text>
-              </Text>
+            <View key={space.id} style={[ui.row, i === SPACES.length - 1 && { borderBottomWidth: 0 }]}>
+              <Text style={[ui.key, { flex: 1 }]} numberOfLines={1}>{space.name}</Text>
+              <Counts
+                cells={[
+                  { v: n('available'), c: theme.colors.green },
+                  { v: n('reserved'), c: theme.colors.blue },
+                  { v: n('occupied'), c: theme.colors.red },
+                  { v: n('on_break'), c: theme.colors.yellow },
+                ]}
+              />
             </View>
           );
         })}
-      </View>
+      </Card>
 
-      <SectionLabel label="Policy" />
-      <View style={styles.infoCard}>
-        <Row k="Session length" v="60 min" valueColor={theme.colors.green} />
-        <Row k="Break length" v="15 min" valueColor={theme.colors.yellow} />
-        <Row k="Grace period" v="5 min" valueColor={theme.colors.red} />
-        <Row k="Reservation window" v="5 min" valueColor={theme.colors.blue} />
-      </View>
-
-      <Button
-        label="Reset All Tables"
-        variant="ghost"
-        onPress={onReset}
-        style={{ marginTop: 24 }}
+      <AccountMenu
+        visible={!!menu}
+        title={menu?.title}
+        subtitle={menu?.subtitle}
+        items={menu?.items ?? []}
+        onCancel={() => setMenu(null)}
       />
     </ScrollView>
   );
 }
 
-function SectionLabel({ label }: { label: string }) {
+/** Four fixed-width columns so numbers line up under their headings. */
+function Counts({ cells, header }: { cells: { v: number | string; c: string }[]; header?: boolean }) {
   return (
-    <View style={styles.sectionRow}>
-      <View style={styles.dot} />
-      <Text style={styles.sectionText}>{label}</Text>
-      <View style={styles.line} />
-    </View>
-  );
-}
-
-function Stat({ label, value, color }: { label: string; value: number; color?: string }) {
-  return (
-    <View style={styles.statCell}>
-      <Text style={styles.statLabel}>{label}</Text>
-      <Text style={[styles.statValue, color ? { color } : null]}>{value}</Text>
-    </View>
-  );
-}
-
-function Row({ k, v, valueColor }: { k: string; v: string; valueColor?: string }) {
-  return (
-    <View style={styles.row}>
-      <Text style={styles.key}>{k}</Text>
-      <Text style={[styles.value, valueColor ? { color: valueColor } : null]}>{v}</Text>
+    <View style={styles.counts}>
+      {cells.map((cell, i) => (
+        <Text
+          key={i}
+          style={[styles.countCell, header ? styles.countHead : null, { color: cell.c }]}
+        >
+          {cell.v}
+        </Text>
+      ))}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { padding: 20 },
-  sectionRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginTop: 24,
-    marginBottom: 12,
-  },
-  dot: {
-    width: 4,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: theme.colors.green,
-  },
-  sectionText: {
-    fontFamily: theme.fonts.monoBold,
-    fontSize: 10,
-    color: theme.colors.textDim,
-    letterSpacing: 2.5,
-    textTransform: 'uppercase',
-  },
-  line: { flex: 1, height: 1, backgroundColor: theme.colors.border },
+  segBar: { paddingHorizontal: 20, paddingTop: 12 },
+  container: { padding: 20, paddingBottom: 48 },
   statGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  statCell: {
-    width: '48%',
-    padding: 16,
-    backgroundColor: theme.colors.surface,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    borderRadius: theme.radius,
-  },
-  statLabel: {
-    fontFamily: theme.fonts.mono,
-    fontSize: 9,
-    color: theme.colors.textDim,
-    letterSpacing: 2,
-    textTransform: 'uppercase',
-  },
-  statValue: {
-    fontFamily: theme.fonts.display,
-    fontSize: 32,
-    color: theme.colors.text,
-    marginTop: 8,
-  },
-  infoCard: {
-    padding: 16,
-    backgroundColor: theme.colors.surface,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    borderRadius: theme.radius,
-  },
-  row: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: theme.colors.border,
-  },
-  key: {
-    fontFamily: theme.fonts.mono,
-    fontSize: 10,
-    color: theme.colors.textDim,
-    letterSpacing: 1.5,
-    textTransform: 'uppercase',
-  },
-  value: {
-    fontFamily: theme.fonts.monoBold,
-    fontSize: 13,
-    color: theme.colors.text,
-  },
   valueSmall: { fontFamily: theme.fonts.monoBold, fontSize: 11 },
-  emptyLive: {
-    fontFamily: theme.fonts.mono,
-    fontSize: 10,
-    color: theme.colors.textDim,
-    letterSpacing: 1.5,
-    textTransform: 'uppercase',
-    textAlign: 'center',
-    paddingVertical: 8,
-  },
+  counts: { flexDirection: 'row' },
+  countCell: { width: 40, textAlign: 'center', fontFamily: theme.fonts.monoBold, fontSize: 12 },
+  countHead: { fontFamily: theme.fonts.mono, fontSize: 10, letterSpacing: 0.5 },
+  chart: { flexDirection: 'row', alignItems: 'flex-end', height: 74, gap: 2, marginTop: 12 },
+  barCol: { flex: 1, justifyContent: 'flex-end' },
+  bar: { borderRadius: 2 },
+  axis: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 6 },
   liveRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: theme.colors.border,
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: theme.colors.border,
   },
   liveLeft: { flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 },
   liveDot: { width: 6, height: 6, borderRadius: 3 },
-  liveTable: {
-    fontFamily: theme.fonts.display,
-    fontSize: 14,
-    color: theme.colors.text,
-    letterSpacing: 0.5,
-  },
-  liveSpace: {
-    fontFamily: theme.fonts.mono,
-    fontSize: 9,
-    color: theme.colors.textDim,
-    letterSpacing: 1,
-    textTransform: 'uppercase',
-  },
-  liveRight: { alignItems: 'flex-end' },
-  liveOwner: {
-    fontFamily: theme.fonts.monoBold,
-    fontSize: 10,
-    color: theme.colors.text,
-    letterSpacing: 1,
-  },
-  liveStatus: {
-    fontFamily: theme.fonts.mono,
-    fontSize: 8,
-    letterSpacing: 1.5,
-    textTransform: 'uppercase',
-    marginTop: 2,
-  },
+  liveTable: { fontFamily: theme.fonts.display, fontSize: 14, color: theme.colors.text },
+  liveSpace: { fontFamily: theme.fonts.mono, fontSize: 9, color: theme.colors.textDim, letterSpacing: 1, textTransform: 'uppercase' },
+  liveOwner: { fontFamily: theme.fonts.monoBold, fontSize: 11, color: theme.colors.text, paddingVertical: 4 },
 });

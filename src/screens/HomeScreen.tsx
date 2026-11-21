@@ -5,6 +5,7 @@ import { myHostelId, spaceCounts } from '../state/selectors';
 import { findSpace } from '../constants/spaces';
 import { theme } from '../constants/theme';
 import { HeroCard } from '../components/HeroCard';
+import { StatusBanners } from '../components/StatusBanners';
 
 interface Props {
   onOpenSpace: (id: string) => void;
@@ -14,11 +15,12 @@ interface Props {
 export function HomeScreen({ onOpenSpace, onSetHostel }: Props) {
   const { state } = useStore();
   const hostelId = myHostelId(state);
-  const hostel = hostelId ? findSpace(hostelId) : null;
+  const hostel = (hostelId ? findSpace(hostelId) : null) ?? null;
   const library = findSpace('library')!;
 
   return (
     <ScrollView contentContainerStyle={styles.container}>
+      <StatusBanners spaceId={hostelId} />
       <View style={styles.sectionRow}>
         <View style={styles.dot} />
         <Text style={styles.sectionText}>Quick Access</Text>
